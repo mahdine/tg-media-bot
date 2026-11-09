@@ -1,4 +1,9 @@
-node_modules
-data
+# کد
+node_modules/
+bot/node_modules/
+bot/data/
+bot/bin/
+bot/.env
+*.log
+data/
 .env
-cookies.txt

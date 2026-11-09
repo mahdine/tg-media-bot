@@ -1,0 +1,18 @@
+# Keep shell/executable text at LF on every platform (CRLF breaks shebangs:
+# the test stub's `#!/usr/bin/env bun` becomes `bun\r` on a Windows checkout).
+* text=auto
+*.sh text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.js text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.toml text eol=lf
+*.md text eol=lf
+*.json text eol=lf
+*.Dockerfile text eol=lf
+Dockerfile text eol=lf
+*.service text eol=lf
+*.env.example text eol=lf
+bot/test/yt-dlp text eol=lf
+*.ps1 text eol=crlf

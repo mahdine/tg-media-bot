@@ -44,6 +44,8 @@ const GUEST_WAIT = Number(env.GUEST_WAIT_MS) || 30_000
 // (<guest_query_id>.held says it's waiting), instead of after GUEST_WAIT,
 // so no test races that timer (deadline())
 const GUEST_GATES = env.GUEST_GATES
+// Set YTDLP_UPDATE=off to pin the installed yt-dlp (no startup/daily self-update)
+const NO_UPDATE = env.YTDLP_UPDATE === 'off'
 // Only formats whose every request goes through the proxy: yt-dlp's own HTTP
 // (HLS, DASH, websockets) and ffmpeg's http(s), which yt-dlp hands the proxy
 // to. rtmp, rtsp and mms would connect directly.
@@ -1814,7 +1816,7 @@ function main() {
   })
   bot.catch((e) => console.error(e.error))
 
-  setInterval(() => selfUpdate(updateOnce), 24 * 3600_000)
+  if (!NO_UPDATE) setInterval(() => selfUpdate(updateOnce), 24 * 3600_000)
   void promo.refresh()
   setInterval(promo.refresh, 5 * 60_000)
   setInterval(promo.flush, 60_000)
@@ -1844,7 +1846,7 @@ function main() {
   // holding the polling lock; bot.stop() confirms the fetched updates. They
   // begin once the first self-update try is over, while a failed one's
   // retries go on (yt-dlp runs wait for a try, not for the pauses between).
-  return selfUpdate(updateOnce).first.then(() =>
+  return (NO_UPDATE ? Promise.resolve() : selfUpdate(updateOnce).first).then(() =>
     pollWithHandover(
       () => {
         setInterval(keepalive, 6 * 3600_000)

@@ -1,0 +1,39 @@
+# tg-media-bot + local Bot API server (2GB uploads)
+#
+#   1) cp .env.example .env   (fill TOKEN, TELEGRAM_API_ID, TELEGRAM_API_HASH)
+#   2) docker compose up -d
+#   3) docker compose logs -f
+#
+# The bot talks to the local Bot API server (bot-api) on 127.0.0.1:8081.
+# Without the local server the bot falls back to the cloud API (50MB cap).
+
+services:
+  bot:
+    build: ./bot
+    container_name: tg-media-bot
+    env_file: .env
+    environment:
+      # point the bot at the local (2GB) Bot API server
+      BOT_API_URL: http://bot-api:8081
+      DATA_DIR: /data
+    volumes:
+      - bot-data:/data
+    depends_on:
+      - bot-api
+    restart: unless-stopped
+
+  bot-api:
+    image: aiogram/telegram-bot-api:10.3-linuxamd64
+    container_name: tg-botapi
+    env_file: .env
+    environment:
+      # --local enables 2GB uploads; requires valid api-id/api-hash from
+      # https://my.telegram.org (API development tools)
+      TELEGRAM_LOCAL: "1"
+    ports:
+      # bind to loopback only; the bot reaches it over the compose network
+      - "127.0.0.1:8081:8081"
+    restart: unless-stopped
+
+volumes:
+  bot-data:
