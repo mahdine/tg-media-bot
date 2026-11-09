@@ -16,15 +16,13 @@
 tg-media-bot/
 ├── bot/                     # کد اصلی بات (TypeScript / bun + grammy + yt-dlp)
 │   ├── bot.ts               # خود بات
-│   ├── .env                 # تنظیمات شما (توکن،…) — در git نیست
+│   ├── Dockerfile           # تصویر بات
 │   └── ...
-├── deploy/                  # فایل‌های استقرار روی هاست لینوکسی
-│   ├── docker-compose.yml   # بات + سرور Bot API محلی (ساده‌ترین راه)
-│   ├── tg-media-bot.service # unit برای اجرای مستقیم بدون Docker
-│   └── bot-api.Dockerfile   # (اختیاری) بیلد سرور Bot API خودتان
+├── deploy/
+│   ├── bot-api.Dockerfile   # (اختیاری) بیلد سرور Bot API خودتان
+├── docker-compose.yml       # بات + سرور Bot API محلی (۲GB)
 ├── scripts/
-│   ├── install-linux.sh     # نصب یکپارچه روی هاست لینوکسی
-│   └── run-wsl-keepalive.ps1# (فقط ویندوز/WSL) نگه‌داشتن VM زنده
+│   └── install-linux.sh     # نصب یکپارچه روی هاست لینوکسی
 ├── .github/workflows/ci.yml # تست خودکار با هر push
 ├── .env.example             # نمونه تنظیمات
 └── README.md
@@ -42,63 +40,53 @@ tg-media-bot/
 
 ## پیش‌نیازها
 
-| جزء | نسخه | توضیح |
-|---|---|---|
-| [bun](https://bun.sh) | 1.1+ | ران‌تایم TypeScript |
-| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | اخیر | روی PATH |
-| ffmpeg | اخیر | روی PATH (برای merge/تامنیل) |
-| Docker (اختیاری) | 24+ | فقط اگر Bot API محلی با کانتینر می‌خواهید |
+تنها **Docker** (با پلاگین Compose) لازم است — bun، yt-dlp و ffmpeg همگی
+داخل تصویرهای کانتینر نصب می‌شوند.
 
-## تنظیمات (bot/.env)
+## تنظیمات (.env)
+
+یک فایل `.env` در ریشهٔ مخزن، **هر دو سرویس** (بات + سرور Bot API) را تنظیم می‌کند:
 
 ```bash
-cd bot
-cp ../.env.example .env
-nano .env        # TOKEN را از @BotFather بگذارید
+cp .env.example .env
+nano .env
 ```
 
-| متغیر | اجباری | پیش‌فرض | توضیح |
-|---|---|---|---|
-| `TOKEN` | **بله** | — | توکن بات از BotFather |
-| `BOT_API_URL` | خیر | API ابری (۵۰MB) | `http://127.0.0.1:8081` برای ۲GB |
-| `YTDLP_UPDATE` | خیر | on | `off` = پین کردن نسخه yt-dlp |
-| `ADMIN_ID` | خیر | — | اعلان خرابی لگین یوتیوب |
-| `MAX_DOWNLOADS` | خیر | 8 | دانلودهای هم‌زمان |
+| متغیر | اجباری | توضیح |
+|---|---|---|
+| `TOKEN` | **بله** | توکن بات از @BotFather |
+| `TELEGRAM_API_ID` | **بله** | از [my.telegram.org](https://my.telegram.org) ← *API development tools* (برای ۲GB) |
+| `TELEGRAM_API_HASH` | **بله** | همان صفحه |
+| `YTDLP_UPDATE` | خیر | `off` = پین کردن نسخه yt-dlp (پیش‌فرضِ نمونه) |
+| `MAX_DOWNLOADS` | خیر | دانلودهای هم‌زمان (پیش‌فرض 8) |
+| `ADMIN_ID` | خیر | اعلان خرابی لگین یوتیوب |
+| `DATA_DIR` / `STATS_PORT` / `STORAGE_CHAT` / `COOKIES` | خیر | جزئیات در `.env.example` |
 
 ## اجرا
 
-### ۱) سریع — مستقیم روی هاست (بدون Docker)
-
 ```bash
-cd bot
-bun install
-bun bot.ts
-```
-
-### ۲) ماندگار — systemd
-
-```bash
-sudo install -Dm644 deploy/tg-media-bot.service /etc/systemd/system/
-# مسیرها را در unit مطابق سرور خودتان تنظیم کنید
-sudo systemctl enable --now tg-media-bot
-journalctl -u tg-media-bot -f
-```
-
-### ۳) کامل — Docker Compose (بات + Bot API محلی ۲GB)
-
-```bash
-cp .env.example .env  # TOKEN + TELEGRAM_API_ID + TELEGRAM_API_HASH
-docker compose up -d
+docker compose up -d --build
 docker compose logs -f
 ```
 
-برای Bot API محلی، **`TELEGRAM_API_ID` و `TELEGRAM_API_HASH`** لازم است:
-از [my.telegram.org](https://my.telegram.org) ← *API development tools* بگیرید.
+کانتینرها:
+- `tg-media-bot` — خود بات (polling + yt-dlp + ffmpeg)
+- `tg-botapi` — سرور Bot API محلی با `--local` → ارسال تا **۲GB**
 
-### ۴) نصب یک‌دست (اسکریپت)
+مدیریت روزمره:
 
 ```bash
-bash scripts/install-linux.sh
+docker compose ps              # وضعیت
+docker compose logs -f         # لاگ
+docker compose down            # توقف
+git pull && docker compose up -d --build   # آپدیت
+```
+
+## نصب یک‌دست روی هاست لینوکسی
+
+```bash
+git clone <this-repo> && cd tg-media-bot
+bash scripts/install-linux.sh   # Docker را نصب می‌کند، .env می‌سازد، compose بالا می‌آورد
 ```
 
 ## git / آپدیت از upstream
@@ -124,17 +112,6 @@ bun test            # unit + e2e (ffmpeg و yt-dlp روی PATH لازم است)
 ```
 
 CI در هر push اجرا می‌شود (`.github/workflows/ci.yml`).
-
-## دیپلوی روی هاست لینوکسی
-
-```bash
-git clone <this-repo>
-cd tg-media-bot
-bash scripts/install-linux.sh   # bun + yt-dlp + ffmpeg را نصب می‌کند
-```
-
-سپس یکی از راه‌های «اجرا» بالا. روی سرور واقعی نیاز به هیچ keepalive‌ای نیست؛
-systemd/Docker همه‌چیز را زنده نگه می‌دارند.
 
 ## نکات عملی (کسب‌شده از راه‌اندازی)
 
