@@ -1,139 +1,141 @@
-# tg-media-bot — بات تلگرامی دانلودر ویدیو/صوت/متن
+# tg-media-bot — Telegram video/audio/text downloader bot
 
-بات تلگرامی که لینک **یوتیوب، اینستاگرام، ایکس (توییتر)، تیک‌تاک** و ده‌ها سایت دیگر
-را می‌گیرد، با **yt-dlp** دانلود می‌کند و فایل را در همان چت تلگرام برمی‌گرداند
-(ویدیو تا **۲GB** با سرور Bot API محلی). کد اصلی از
-[Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot) (لایسنس MIT) است
-و در این مخزن برای **اجرای شخصی روی یک هاست لینوکسی** تنظیم شده است.
+A Telegram bot that takes a link from **YouTube, Instagram, X (Twitter),
+TikTok** and dozens of other sites, downloads it with **yt-dlp**, and sends the
+file back in the same Telegram chat (up to **2 GB** via a local Bot API server).
+The core code is
+[Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot)
+(MIT), set up here for **self-hosting on a Linux box via Docker**.
 
-> اعتبار اصلی: [Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot) — MIT
+> Original credit: [Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot) — MIT
 
 ---
 
-## ساختار مخزن
+## Repository layout
 
 ```
 tg-media-bot/
-├── bot/                     # کد اصلی بات (TypeScript / bun + grammy + yt-dlp)
-│   ├── bot.ts               # خود بات
-│   ├── Dockerfile           # تصویر بات
+├── bot/                     # core bot code (TypeScript / bun + grammy + yt-dlp)
+│   ├── bot.ts               # the bot
+│   ├── Dockerfile           # bot image
 │   └── ...
 ├── deploy/
-│   ├── bot-api.Dockerfile   # (اختیاری) بیلد سرور Bot API خودتان
-├── docker-compose.yml       # بات + سرور Bot API محلی (۲GB)
+│   └── bot-api.Dockerfile   # (optional) build your own Bot API server
+├── docker-compose.yml       # bot + local Bot API server (2GB)
 ├── scripts/
-│   └── install-linux.sh     # نصب یکپارچه روی هاست لینوکسی
-├── .github/workflows/ci.yml # تست خودکار با هر push
-├── .env.example             # نمونه تنظیمات
+│   └── install-linux.sh     # one-shot install on a Linux host
+├── .github/workflows/ci.yml # auto tests on every push
+├── .env.example             # config template
 └── README.md
 ```
 
-## امکانات
+## Features
 
-- لینک بفرست ← فایل برگردد (ویدیو/صوت/انیمیشن)، با تشخیص خودکار نوع
-- همه سایت‌های پشتیبانی‌شده [yt-dlp](https://github.com/yt-dlp/yt-dlp) (۱۰۰۰+)
-- ارسال تا **۲GB** با سرور Bot API محلی (`--local`)
-- کش: لینک تکراری همان لحظه برمی‌گردد (SQLite)
-- صف دانلود، مدیریت flood-control تلگرام، کار در گروه و Private
-- آپدیت خودکار yt-dlp (قابل خاموش کردن با `YTDLP_UPDATE=off`)
-- پاسخ‌ها چندزبانه (`i18n.ts` — افزودن فارسی در فهرست کارهای بعدی)
+- Send a link → get the file back (video/audio/animation), type auto-detected
+- Every site supported by [yt-dlp](https://github.com/yt-dlp/yt-dlp) (1000+)
+- Uploads up to **2 GB** via a local Bot API server (`--local`)
+- Cache: an already-downloaded link is returned instantly (SQLite)
+- Download queue, Telegram flood-control handling, works in groups and private
+- yt-dlp auto-update (disable with `YTDLP_UPDATE=off`)
+- Multilingual replies (`i18n.ts` — adding more languages is on the backlog)
 
-## پیش‌نیازها
+## Prerequisites
 
-تنها **Docker** (با پلاگین Compose) لازم است — bun، yt-dlp و ffmpeg همگی
-داخل تصویرهای کانتینر نصب می‌شوند.
+Only **Docker** (with the Compose plugin) is required — bun, yt-dlp and ffmpeg
+are all installed inside the container images.
 
-## تنظیمات (.env)
+## Configuration (.env)
 
-یک فایل `.env` در ریشهٔ مخزن، **هر دو سرویس** (بات + سرور Bot API) را تنظیم می‌کند:
+A single `.env` at the repo root configures **both services** (bot + Bot API
+server):
 
 ```bash
 cp .env.example .env
 nano .env
 ```
 
-| متغیر | اجباری | توضیح |
+| Variable | Required | Description |
 |---|---|---|
-| `TOKEN` | **بله** | توکن بات از @BotFather |
-| `TELEGRAM_API_ID` | **بله** | از [my.telegram.org](https://my.telegram.org) ← *API development tools* (برای ۲GB) |
-| `TELEGRAM_API_HASH` | **بله** | همان صفحه |
-| `YTDLP_UPDATE` | خیر | `off` = پین کردن نسخه yt-dlp (پیش‌فرضِ نمونه) |
-| `MAX_DOWNLOADS` | خیر | دانلودهای هم‌زمان (پیش‌فرض 8) |
-| `ADMIN_ID` | خیر | اعلان خرابی لگین یوتیوب |
-| `DATA_DIR` / `STATS_PORT` / `STORAGE_CHAT` / `COOKIES` | خیر | جزئیات در `.env.example` |
+| `TOKEN` | **yes** | bot token from @BotFather |
+| `TELEGRAM_API_ID` | **yes** | from [my.telegram.org](https://my.telegram.org) → *API development tools* (for 2GB) |
+| `TELEGRAM_API_HASH` | **yes** | same page |
+| `YTDLP_UPDATE` | no | `off` = pin the installed yt-dlp (template default) |
+| `MAX_DOWNLOADS` | no | concurrent downloads (default 8) |
+| `ADMIN_ID` | no | Telegram user id to alert if the YouTube login/cookies die |
+| `DATA_DIR` / `STATS_PORT` / `STORAGE_CHAT` / `COOKIES` | no | see `.env.example` |
 
-## اجرا
+## Run
 
 ```bash
 docker compose up -d --build
 docker compose logs -f
 ```
 
-کانتینرها:
-- `tg-media-bot` — خود بات (polling + yt-dlp + ffmpeg)
-- `tg-botapi` — سرور Bot API محلی با `--local` → ارسال تا **۲GB**
+Containers:
+- `tg-media-bot` — the bot itself (polling + yt-dlp + ffmpeg)
+- `tg-botapi` — local Bot API server with `--local` → uploads up to **2 GB**
 
-مدیریت روزمره:
+Day-to-day management:
 
 ```bash
-docker compose ps              # وضعیت
-docker compose logs -f         # لاگ
-docker compose down            # توقف
-git pull && docker compose up -d --build   # آپدیت
+docker compose ps              # status
+docker compose logs -f         # logs
+docker compose down            # stop
+git pull && docker compose up -d --build   # update
 ```
 
-## نصب یک‌دست روی هاست لینوکسی
+## One-shot install on a Linux host
 
 ```bash
 git clone <this-repo> && cd tg-media-bot
-bash scripts/install-linux.sh   # Docker را نصب می‌کند، .env می‌سازد، compose بالا می‌آورد
+bash scripts/install-linux.sh   # installs Docker, creates .env, runs compose up
 ```
 
-## git / آپدیت از upstream
+## git / updating from upstream
 
-این مخزن روی تاریخچهٔ upstream ساخته شده است (یک commitِ «بازسازی deploy» روی
-آخرین commitِ upstream). remoteٔ `upstream` به
-[Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot) متصل است:
+This repo sits on the upstream history (one "deployment layout" commit on top of
+the latest upstream commit). The `upstream` remote points to
+[Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot):
 
 ```bash
-git pull --no-rebase --no-edit upstream main   # به‌روزرسانی کد بات
-# بعد از merge:
+git pull --no-rebase --no-edit upstream main   # update the bot code
+# after merging:
 cd bot && bun install && bun test
 ```
 
-## تست
+## Tests
 
-تست‌های خود بات (بدون توکن واقعی، با Bot API جعلی):
+The bot's own test suite (no real token, uses a fake Bot API):
 
 ```bash
 cd bot
 bun install
-bun test            # unit + e2e (ffmpeg و yt-dlp روی PATH لازم است)
+bun test            # unit + e2e (needs ffmpeg and yt-dlp on PATH)
 ```
 
-CI در هر push اجرا می‌شود (`.github/workflows/ci.yml`).
+CI runs on every push (`.github/workflows/ci.yml`).
 
-## نکات عملی (کسب‌شده از راه‌اندازی)
+## Practical notes (learned from bring-up)
 
-- **بلاک IP توسط YouTube:** اگر هاست شما IP دیتاسنتر دارد، ممکن است YouTube
-  درخواست‌ها را رد کند. راه‌حل‌های موجود در کد اصلی: `WARP_PROXY` (پراکسی WARP
-  برای هاست‌های یوتیوب) و `COOKIES` (سیشن لگین‌شده).
-- **`EGRESS_DENY is empty`** هنگام اجرای شخصی بی‌ضرر است (فقط برای هاست ابری
-  توصیه شده).
-- **سقف ۵۰MB:** بدون Bot API محلی، فایل‌های بزرگ‌تر از ۵۰MB ارسال نمی‌شوند
-  (محدودیت API ابری تلگرام).
-- **اعتبار my.telegram.org:** `api-id/api-hash` اشتباه با خطای
-  `invalid api-id/api-hash` هنگام `getMe` در سرور محلی خود را نشان می‌دهد؛
-  اعتبار درست با `{ok:true, ...}` پاسخ می‌دهد.
+- **YouTube IP blocking:** if your host has a datacenter IP, YouTube may refuse
+  requests. Solutions already in the upstream code: `WARP_PROXY` (WARP proxy for
+  YouTube-hosted servers) and `COOKIES` (a logged-in session).
+- **`EGRESS_DENY is empty`** is harmless when self-hosting (it is only a
+  recommendation for cloud hosts).
+- **50 MB cap:** without a local Bot API server, files larger than 50 MB are not
+  sent (Telegram cloud API limit).
+- **my.telegram.org credentials:** a wrong `api-id/api-hash` shows up as
+  `invalid api-id/api-hash` when the local server calls `getMe`; correct ones
+  answer with `{ok:true, ...}`.
 
-## کارهای بعدی (backlog)
+## Backlog
 
-- [ ] خروجی **MP3** (استخراج صدا)
-- [ ] **متن‌خروجی**: لینک توییت/پست بدون ویدیو ← متن پست ارسال شود
-- [ ] **whitelist** کاربرها
-- [ ] پاسخ‌های **فارسی** در `i18n.ts`
-- [ ] ترنسیپت گفتار (اختیاری)
+- [ ] **MP3** output (extract audio)
+- [ ] **Text output**: a tweet/post link with no video → send the post text
+- [ ] user **whitelist**
+- [ ] more languages in `i18n.ts`
+- [ ] speech-to-text transcription (optional)
 
-## لایسنس
+## License
 
-MIT — کد اصلی: Borodutch/VideoDownloadBot (MIT). تغییرات این مخزن هم MIT.
+MIT — core code: Borodutch/VideoDownloadBot (MIT). Changes in this repo are also MIT.
