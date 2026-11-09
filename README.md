@@ -101,6 +101,18 @@ docker compose logs -f
 bash scripts/install-linux.sh
 ```
 
+## git / آپدیت از upstream
+
+این مخزن روی تاریخچهٔ upstream ساخته شده است (یک commitِ «بازسازی deploy» روی
+آخرین commitِ upstream). remoteٔ `upstream` به
+[Borodutch/VideoDownloadBot](https://github.com/Borodutch/VideoDownloadBot) متصل است:
+
+```bash
+git pull --no-rebase --no-edit upstream main   # به‌روزرسانی کد بات
+# بعد از merge:
+cd bot && bun install && bun test
+```
+
 ## تست
 
 تست‌های خود بات (بدون توکن واقعی، با Bot API جعلی):
