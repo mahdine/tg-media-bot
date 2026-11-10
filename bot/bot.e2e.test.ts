@@ -3280,7 +3280,7 @@ e2e(
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:720:menubest1')
       await bot.until(() => bot.videos().length === 2)
       // a tap answered from the cache (no download) has no job line at all
-      await bot.until(() => bot.jobs().some((j) => j.includes(' q=720 ')))
+      await bot.until(() => bot.jobs().some((j) => j.includes(' q=720 ')), 5000).catch(() => console.log('DBG JOBS:', JSON.stringify(bot.jobs())))
       expect(bot.jobs().filter((j) => j.includes(' q=720 ')).some((j) => j.startsWith('job ok '))).toBe(true)
     } finally {
       jobs = await bot.stop()
