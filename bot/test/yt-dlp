@@ -208,6 +208,12 @@ if (args.includes('-J')) {
   )
 } else {
   const out = args[args.indexOf('-o') + 1]!.replace('%(ext)s', 'mp4')
+  // the transcript: no file, the subtitles in the job's dir, as yt-dlp's
+  // --write-subs leaves them
+  if (args.includes('--skip-download')) {
+    writeFileSync(join(dirname(out), 'v.en.vtt'), 'WEBVTT\nKind: captions\nLanguage: en\n\n00:00:00.000 --> 00:00:02.000\nHello <i>world</i>\n')
+    process.exit(0)
+  }
   // the job's first download leaves a mark in its dir
   const mark = join(dirname(out), 'fake-tried')
   const first = !existsSync(mark)

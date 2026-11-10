@@ -246,9 +246,27 @@ function start(
     calls,
     // FAKE_MP4's bytes, which a download copies
     mp4: readFileSync(mp4),
-    // in a private chat
+    // in a private chat; returns the message (a tap's menu replies to it)
     link(user: number, v: string) {
-      updates.push({ update_id: updates.length + 1, message: message(user, v) } as { update_id: number })
+      const m = message(user, v)
+      updates.push({ update_id: updates.length + 1, message: m } as { update_id: number })
+      return m
+    },
+    // a tap on the bot's inline menu: data is the button's callback (as
+    // answerMenu sends it, 'q:<quality>:<video id>'); menu is the menu
+    // message as the callback carries it (with, or without, its reply to
+    // the link — a local Bot API server's callback may drop it)
+    tap(user: number, menu: object, data: string) {
+      updates.push({
+        update_id: updates.length + 1,
+        callback_query: {
+          id: `cb${++id}`,
+          from: { id: user, is_bot: false, first_name: 'u', language_code: 'en' },
+          chat_instance: 'cb',
+          message: menu,
+          data,
+        },
+      } as { update_id: number })
     },
     // the bot's own video of v forwarded by user 9 into chat (post)
     forward(chat: number, v: string) {
@@ -3232,4 +3250,88 @@ e2e(
     expect(jobs.map((l) => l.split(' ', 2)[1])).toEqual(['ok'])
   },
   30_000,
+)
+
+e2e(
+  'bot: a bare YouTube link is offered the quality menu; a tap downloads its quality, not the link best, and caches under its own key',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const link = `https://www.youtube.com/watch?v=menubest1`
+    const menus = () => bot.calls.filter((c) => c.chat === 1 && c.text === t('en', 'qualityMenu')).length
+    const bot = start({ DATA_DIR: data, E2E_MENU: '1' })
+    let jobs: string[] = []
+    try {
+      // a bare link in a private chat: the menu, no download yet
+      const l = bot.link(1, 'menubest1')!
+      await bot.until(() => menus() === 1)
+      expect(bot.videos()).toHaveLength(0)
+      // best: the video of the link (a plain job line), cached under the link
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l }, 'q:best:menubest1')
+      await bot.until(() => bot.videos().length === 1)
+      expect(bot.jobs().some((j) => j.includes('q='))).toBe(false)
+      // 720p for the same link: a download (not the link's cached best)
+      const l2 = bot.link(1, 'menubest1')!
+      await bot.until(() => menus() === 2)
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:720:menubest1')
+      await bot.until(() => bot.videos().length === 2)
+      expect(bot.jobs().filter((j) => j.includes('q=720')).some((j) => j.startsWith('job ok '))).toBe(true)
+    } finally {
+      jobs = await bot.stop()
+    }
+    // the link's key is the best's file alone (the 720p didn't overwrite it);
+    // the 720p is cached under its own key
+    const db = new Database(join(data, 'bot.sqlite'), { readonly: true })
+    try {
+      expect(db.query<{ kind: string }, [string]>('SELECT kind FROM files WHERE key = ?').get(link)?.kind).toBe('video')
+      expect(db.query('SELECT 1 FROM files WHERE key = ?').get('Youtube:menubest1:720')).toBeTruthy()
+      expect(db.query("SELECT 1 FROM files WHERE key = ? AND kind = 'video'").get(`${link}:720`)).toBeUndefined()
+    } finally {
+      db.close()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
+  },
+  20_000,
+)
+
+e2e(
+  "bot: a tap whose quality isn't the link's own downloads, as the link's cached best goes out again for its own tap",
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const link = `https://www.youtube.com/watch?v=menucache1`
+    const db = new Database(join(data, 'bot.sqlite'))
+    db.run('CREATE TABLE files (key TEXT PRIMARY KEY, kind TEXT NOT NULL, file_id TEXT NOT NULL, title TEXT NOT NULL, url TEXT NOT NULL)')
+    db.run("INSERT INTO files VALUES (?, 'video', 'cachedbest', 'Video', ?)", [link, link])
+    db.close()
+    const menus = () => bot.calls.filter((c) => c.chat === 1 && c.text === t('en', 'qualityMenu')).length
+    const bot = start({ DATA_DIR: data, E2E_MENU: '1' })
+    let jobs: string[] = []
+    try {
+      // the cached best goes out for the link's own tap, from the cache
+      const l = bot.link(1, 'menucache1')!
+      await bot.until(() => menus() === 1)
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l }, 'q:best:menucache1')
+      await bot.until(() => bot.videos().length === 1)
+      expect(bot.videos()[0]!.upload).toBe(false)
+      // the same link, audio: not the cached best — a download
+      const l2 = bot.link(1, 'menucache1')!
+      await bot.until(() => menus() === 2)
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:audio:menucache1')
+      await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.method === 'sendAudio'))
+      expect(bot.jobs().filter((j) => j.includes('q=audio')).some((j) => j.startsWith('job ok '))).toBe(true)
+      // a tap the callback carries without its reply (a local Bot API server's):
+      // the button's video id leads the link back
+      bot.link(1, 'menucache1')
+      await bot.until(() => menus() === 3)
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1 }, 'q:720:menucache1')
+      await bot.until(() => bot.videos().length === 2)
+      expect(bot.jobs().filter((j) => j.includes('q=720')).some((j) => j.startsWith('job ok '))).toBe(true)
+    } finally {
+      jobs = await bot.stop()
+      db.close()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
+  },
+  25_000,
 )

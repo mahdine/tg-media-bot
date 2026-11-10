@@ -1359,6 +1359,9 @@ function main() {
     try {
       await SCRATCH.open(dir)
       const quality = dest.quality
+      // the best is the link's own download (its cache key has no suffix), so
+      // it's the plain job line; the others carry their quality
+      if (quality && quality !== 'best') log.q = quality
       const base = quality ? [...YTDLP, ...qualityArgs(quality)] : YTDLP
       let args = [...base, ...(await jar(dir))]
       let json: string
@@ -1403,7 +1406,10 @@ function main() {
       const fromCache = async (key: string) => {
         const hit = get(key)
         if (hit && !dest.stale && (await resend(dest, hit))) {
-          put(url, hit)
+          // the link's key is the best's alone: a 720p or audio copy is
+          // cached under its own quality key, and must not go out where the
+          // best was asked for
+          if (!quality || quality === 'best') put(url, hit)
           return hit
         }
       }
@@ -1609,7 +1615,9 @@ function main() {
       const file = { ...f, kind, file_id }
       settle(file_id)
       put(id, file)
-      put(url, file)
+      // the link's key, as the file it led to, is the best's alone (a 720p or
+      // an audio download is under its own key)
+      if (!quality || quality === 'best') put(url, file)
       return file
     } finally {
       await saveJar(dir).catch(console.error)
@@ -1619,48 +1627,58 @@ function main() {
     }
   }
 
+  // The link's key in the running jobs: suffixed with the quality, because a
+  // 720p or an audio job is a different download from the link's own (a best)
+  // one, and its file must not go out where the best was asked for, nor the
+  // best's cached copy where the 720p was asked. The link's own file (best,
+  // or no quality) stays under the link alone.
+  const jobKey = (url: string, quality?: Quality) =>
+    quality && quality !== 'best' ? `${url}:${quality}` : url
   // Puts the file into dest.chat: from the cache, from a running job for the
-  // same link, or downloaded now. status(key, true) is that running job's
-  // status: shown only where a queued one would be.
+  // same link and quality, or downloaded now. status(key, true) is that
+  // running job's status: shown only where a queued one would be. A quality
+  // that isn't the link's own (best) doesn't read the link's cache — that's
+  // the best's file — and isn't answered by the link's job.
   async function deliver(
     dest: Dest,
     url: string,
     status: (key: Key, follow?: boolean) => Promise<void>,
   ): Promise<File> {
-    const cached = get(url)
+    const key = jobKey(url, dest.quality)
+    const cached = key === url ? get(url) : undefined
     if (cached && (await resend(dest, cached, (message) => (dest.stale = { message, file_id: cached.file_id }))))
       return dest.stale ? refresh(dest, url, cached) : cached
-    const job = jobs.get(url)
+    const job = jobs.get(key)
     if (job) {
-      const f = await follow(url, job, status)
+      const f = await follow(key, job, status)
       if (!(await resend(dest, f))) throw new Fail('failed')
       return f
     }
     const watch = { key: undefined as Key | undefined, tell: new Set<(key: Key) => void>() }
-    watching.set(url, watch)
-    const fresh = download(dest, url, (key) => {
-      watch.key = key
-      for (const tell of watch.tell) tell(key)
-      return status(key)
+    watching.set(key, watch)
+    const fresh = download(dest, url, (k) => {
+      watch.key = k
+      for (const tell of watch.tell) tell(k)
+      return status(k)
     }).finally(() => {
-      jobs.delete(url)
-      watching.delete(url)
+      jobs.delete(key)
+      watching.delete(key)
     })
-    jobs.set(url, fresh)
+    jobs.set(key, fresh)
     return fresh
   }
 
   // Waits for the job of another request for the link, this one's status
   // following the job's: the job's status so far at once, then each new one
   async function follow(
-    url: string,
+    key: string,
     job: Promise<File>,
     status: (key: Key, follow?: boolean) => Promise<void>,
-  ) {
-    const watch = watching.get(url)
+  ): Promise<File> {
+    const watch = watching.get(key)
     let told = Promise.resolve()
-    const tell = (key: Key) => {
-      told = told.then(() => status(key, true)).catch(() => {})
+    const tell = (k: Key) => {
+      told = told.then(() => status(k, true)).catch(() => {})
     }
     if (watch?.key) tell(watch.key)
     watch?.tell.add(tell)
@@ -1696,34 +1714,42 @@ function main() {
   // downloading at once, unless it was summoned (the user named it, so the
   // link is what they want) or another link in the same message made it not
   // the sole thing asked. Off in a bot run with E2E_PARENT_PID (tests, where
-  // a bare link must download at once).
+  // a bare link must download at once), unless E2E_MENU turns it back on for
+  // a menu test.
   const offerMenu = (ctx: Context, url: string, wanted: string[]) =>
-    !env.E2E_PARENT_PID &&
+    (!env.E2E_PARENT_PID || env.E2E_MENU) &&
     ctx.chat!.type === 'private' &&
     wanted.length === 1 &&
     youtubeVideo(url) &&
     !summoned(ctx.msg!, ctx.me.username)
-  // A menu up now, by chat + message: the link it offers. The button's
-  // callback_data is the quality alone (a URL in it would pass Telegram's
-  // 64-byte limit); a tap looks the link up here. A menu that no one taps
-  // drops off by itself (30 min).
+  // A menu up now, by chat + message: the link it offers, and the video's id
+  // in the button's data too (a tap's message may not keep its reply, as a
+  // local Bot API server's callback doesn't). A menu that no one taps drops
+  // off by itself (30 min).
   const menuLinks = new Map<string, string>()
   const menuKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.msg!.message_id}`
   const answerMenu = (ctx: Context, url: string) => {
     const key = menuKey(ctx)
     const lang = ctx.from?.language_code ?? 'en'
     menuLinks.set(key, url)
+    // a menu that no one taps drops off by itself (30 min); unref'd so it
+    // never holds an exiting bot's event loop
     setTimeout(() => {
       if (menuLinks.get(key) === url) menuLinks.delete(key)
-    }, 30 * 60_000)
+    }, 30 * 60_000).unref()
+    // the video's id, in the button's data (the URL itself would pass
+    // Telegram's 64-byte callback limit; an id doesn't): a tap whose message
+    // lost its reply reads the link back from it
+    const vid = /(?:\?v=|\/shorts\/)(\w+)/.exec(url)?.[1]
+    const suffix = vid ? `:${vid}` : ''
     const board: InlineKeyboardButton[][] = [
       [
-        { text: t(lang, 'qBest'), callback_data: 'q:best' },
-        { text: t(lang, 'q720'), callback_data: 'q:720' },
+        { text: t(lang, 'qBest'), callback_data: `q:best${suffix}` },
+        { text: t(lang, 'q720'), callback_data: `q:720${suffix}` },
       ],
       [
-        { text: t(lang, 'qAudio'), callback_data: 'q:audio' },
-        { text: t(lang, 'qTranscript'), callback_data: 'q:transcript' },
+        { text: t(lang, 'qAudio'), callback_data: `q:audio${suffix}` },
+        { text: t(lang, 'qTranscript'), callback_data: `q:transcript${suffix}` },
       ],
     ]
     void track(
@@ -1738,10 +1764,13 @@ function main() {
         }),
     )
   }
-  // A menu button's tap: the quality, or undefined when the callback is not
-  // the bot's menu (another bot's, or the user's own)
-  const qualityTap = (data: string): Quality | undefined =>
-    /^(q:best|q:720|q:audio|q:transcript)$/.test(data) ? (data.slice(2) as Quality) : undefined
+  // A menu button's tap: the quality, and the video's id the button was for
+  // (a menu offered for a URL without a plain id sends none), or undefined
+  // when the callback is not the bot's menu (another bot's, or the user's own)
+  const qualityTap = (data: string): { q: Quality; id?: string } | undefined => {
+    const m = /^q:(best|720|audio|transcript)(?::(\w+))?$/.exec(data)
+    return m ? { q: m[1] as Quality, id: m[2] } : undefined
+  }
 
   async function handle(ctx: Context, url: string, quality?: Quality) {
     const lang = ctx.from?.language_code
@@ -2109,28 +2138,35 @@ function main() {
     if (!found.length && ctx.chat.type === 'private') help(ctx)
   })
   // A tap on the quality menu: the quality, and the link the menu was for.
-  // The tap's message is the menu; its reply is the link the menu offered,
-  // which becomes the message the download's status replies to (a fresh
+  // The link is looked up by the menu's reply (the link's message, keyed in
+  // menuLinks), then by the video's id the button carries (a callback's
+  // message may not keep its reply, as a local Bot API server's doesn't);
+  // either becomes the message the download's status replies to (a fresh
   // Context on it, as the tap's own is a callback, not a message)
   bot.on('callback_query', (ctx) => {
     const data = ctx.callbackQuery.data
-    const q = data ? qualityTap(data) : undefined
+    const tap = data ? qualityTap(data) : undefined
     const menu = ctx.callbackQuery.message
-    if (!q || !menu) return
+    if (!tap || !menu) return
     const src = menu.reply_to_message
-    // the menu was keyed by the link's message id (answerMenu), so look it up
-    // by the link, not the menu
-    const url = src ? menuLinks.get(`${ctx.chat!.id}:${src.message_id}`) : undefined
-    if (!src || !url) return
+    let url = src ? menuLinks.get(`${ctx.chat!.id}:${src.message_id}`) : undefined
+    if (!url && src) url = urls(src).find((u) => youtubeVideo(u))
+    if (!url && tap.id) url = `https://www.youtube.com/watch?v=${tap.id}`
+    if (!url) return
     void track(
       ctx
         .answerCallbackQuery()
         .then(async () => {
-          menuLinks.delete(`${ctx.chat!.id}:${src.message_id}`)
+          if (src) menuLinks.delete(`${ctx.chat!.id}:${src.message_id}`)
           // the menu's buttons are spent; take the menu down
           await ctx.api.deleteMessage(ctx.chat!.id, menu.message_id).catch(() => {})
-          const fresh = new Context({ update_id: 0, message: src } as any, bot.api, ctx.me)
-          void track(handle(fresh, url, q).catch(console.error))
+          // a fresh Context on the link's message; the button's id stands in
+          // when the callback came without its reply (the menu's own message)
+          const msg =
+            src ??
+            ({ message_id: menu.message_id, chat: menu.chat, from: ctx.from, text: url, entities: [] } as any)
+          const fresh = new Context({ update_id: 0, message: msg } as any, bot.api, ctx.me)
+          void track(handle(fresh, url, tap.q).catch(console.error))
         })
         .catch(() => {}),
     )
