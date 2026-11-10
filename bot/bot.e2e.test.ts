@@ -3280,7 +3280,7 @@ e2e(
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:720:menubest1')
       await bot.until(() => bot.videos().length === 2)
       // a tap answered from the cache (no download) has no job line at all
-      await bot.until(() => bot.jobs().some((j) => j.includes(' q=720 ')), 5000).catch(() => console.log('DBG JOBS:', JSON.stringify(bot.jobs())))
+      await bot.until(() => bot.jobs().some((j) => j.includes(' q=720 ')))
       expect(bot.jobs().filter((j) => j.includes(' q=720 ')).some((j) => j.startsWith('job ok '))).toBe(true)
     } finally {
       jobs = await bot.stop()
@@ -3291,7 +3291,7 @@ e2e(
     try {
       expect(db.query<{ kind: string }, [string]>('SELECT kind FROM files WHERE key = ?').get(link)?.kind).toBe('video')
       expect(db.query('SELECT 1 FROM files WHERE key = ?').get('Youtube:menubest1:720')).toBeTruthy()
-      expect(db.query('SELECT 1 FROM files WHERE key = ? AND kind = ?', [`${link}:720`, 'video'])).toBeNull()
+      expect(db.query('SELECT 1 FROM files WHERE key = ? AND kind = ?').get(`${link}:720`, 'video')).toBeUndefined()
     } finally {
       db.close()
       rmSync(data, { recursive: true, force: true })
