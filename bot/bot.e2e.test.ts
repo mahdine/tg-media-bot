@@ -3265,16 +3265,23 @@ e2e(
       const l = bot.link(1, 'menubest1')!
       await bot.until(() => menus() === 1)
       expect(bot.videos()).toHaveLength(0)
-      // best: the video of the link (a plain job line), cached under the link
+      // best: the video of the link (a plain job line, no quality in it),
+      // cached under the link
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l }, 'q:best:menubest1')
       await bot.until(() => bot.videos().length === 1)
-      expect(bot.jobs().some((j) => j.includes('q='))).toBe(false)
+      // the job line lands a beat after the video is out (the send resolves
+      // first): wait for it, so an assertion on it is not a race ('metaq='
+      // has a 'q=' in it, so the quality's field is matched on its space)
+      await bot.until(() => bot.jobs().length === 1)
+      expect(bot.jobs().some((j) => / q=\w+ /.test(j))).toBe(false)
       // 720p for the same link: a download (not the link's cached best)
       const l2 = bot.link(1, 'menubest1')!
       await bot.until(() => menus() === 2)
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:720:menubest1')
       await bot.until(() => bot.videos().length === 2)
-      expect(bot.jobs().filter((j) => j.includes('q=720')).some((j) => j.startsWith('job ok '))).toBe(true)
+      // a tap answered from the cache (no download) has no job line at all
+      await bot.until(() => bot.jobs().some((j) => j.includes(' q=720 ')))
+      expect(bot.jobs().filter((j) => j.includes(' q=720 ')).some((j) => j.startsWith('job ok '))).toBe(true)
     } finally {
       jobs = await bot.stop()
     }
@@ -3318,14 +3325,16 @@ e2e(
       await bot.until(() => menus() === 2)
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:audio:menucache1')
       await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.method === 'sendAudio'))
-      expect(bot.jobs().filter((j) => j.includes('q=audio')).some((j) => j.startsWith('job ok '))).toBe(true)
+      await bot.until(() => bot.jobs().some((j) => j.includes(' q=audio ')))
+      expect(bot.jobs().filter((j) => j.includes(' q=audio ')).some((j) => j.startsWith('job ok '))).toBe(true)
       // a tap the callback carries without its reply (a local Bot API server's):
       // the button's video id leads the link back
       bot.link(1, 'menucache1')
       await bot.until(() => menus() === 3)
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1 }, 'q:720:menucache1')
       await bot.until(() => bot.videos().length === 2)
-      expect(bot.jobs().filter((j) => j.includes('q=720')).some((j) => j.startsWith('job ok '))).toBe(true)
+      await bot.until(() => bot.jobs().some((j) => j.includes(' q=720 ')))
+      expect(bot.jobs().filter((j) => j.includes(' q=720 ')).some((j) => j.startsWith('job ok '))).toBe(true)
     } finally {
       jobs = await bot.stop()
       db.close()
