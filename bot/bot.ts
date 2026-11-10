@@ -1831,7 +1831,9 @@ function main() {
       promo: d?.promo,
       // anonymous admins and channel posts all come from one bot user
       who: ctx.msg!.sender_chat?.id ?? ctx.from?.id,
-      onProgress: sayProgress,
+      // progress edits are for real chats: the e2e's fake API and stubs need
+      // none of them, and they'd change the calls the tests count
+      onProgress: env.E2E_PARENT_PID ? undefined : sayProgress,
       quality,
     }
     // The exit cuts off a request whose job hasn't begun its upload (past
