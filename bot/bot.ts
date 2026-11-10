@@ -160,10 +160,61 @@ export function picked(info: any) {
 // A tweet with only text or pictures: shared everywhere, never worth an answer
 const TWEET_NO_VIDEO = /\[twitter\].*no video could be found/i
 
+// A status link on a real tweet/x host, and the post id in it
+const TWEET_LINK = /^https?:\/\/(www\.)?(twitter\.com|x\.com)\/(\w+)\/status\/(\d+)/i
+
+// The text of the post a no-media link points at, to send it as: the post's
+// text with its author and link (and photo links when it has none), or null
+// when the post is gone or unfetchable; undefined when the link isn't a no-
+// media tweet, as a page yt-dlp says so about. (A deleted post, a private
+// one, and one the API can't reach all come back null.)
+export async function tweetText(url: string, why: string): Promise<string | null | undefined> {
+  if (!TWEET_NO_VIDEO.test(why)) return undefined
+  const m = url.match(TWEET_LINK)
+  if (!m) return undefined
+  try {
+    const r = await fetch(`https://api.fxtwitter.com/${m[3]}/status/${m[4]}`, {
+      signal: AbortSignal.timeout(20_000),
+    })
+    const j: any = (await r.json().catch(() => undefined))
+    if (j?.code !== 200 || !j.tweet) return null
+    const author = j.tweet.author?.screen_name
+    let text = (j.tweet.text || '').trim()
+    const photos = (j.tweet.media?.photos ?? [])
+      .map((p: any) => p.url)
+      .filter((u: any) => typeof u === 'string')
+    if (!text && !photos.length) return null
+    // Telegram's message length, the author, the link and the photos aside
+    text = text.length > 3_900 ? text.slice(0, 3_900) + '…' : text
+    const out = [text, author ? `@${author}` : '', `https://x.com/${author ?? 'i'}/status/${j.tweet.id}`, ...photos]
+      .filter(Boolean)
+      .join('\n')
+    return out
+  } catch {
+    return null
+  }
+}
+
+// A no-media post yt-dlp failed on: its text to send instead (null when the
+// post is gone or unfetchable — then it hears tweetNotFound, as one who asked
+// would a failure)
+export class Tweet extends Fail {
+  constructor(public text: string | null, why: string) {
+    super(text ? null : 'tweetNotFound', why)
+  }
+}
+
 // What to tell the chat about a failed link, null = nothing. "Not a video"
-// only gets an answer from whoever asked the bot itself.
+// only gets an answer from whoever asked the bot itself; a post that's gone
+// is told the same way (a tweet whose text went out has already been answered).
 export const answer = (key: Key | null, chat: string, called: boolean, why = '') =>
-  TWEET_NO_VIDEO.test(why) ? null : key ?? (chat === 'private' || called ? 'failed' : null)
+  TWEET_NO_VIDEO.test(why)
+    ? key === 'tweetNotFound'
+      ? chat === 'private' || called
+        ? 'tweetNotFound'
+        : null
+      : null
+    : key ?? (chat === 'private' || called ? 'failed' : null)
 
 // What a guest message that doesn't mention the bot hears about a failed link
 // before it has had an answer, null = nothing: what a group message would
@@ -1271,6 +1322,10 @@ function main() {
         const why = String((e as Error).message)
         const soon = unstarted(why)
         if (soon) throw new Fail(soon, why)
+        // a no-media tweet keeps its post's text, which goes out in its place
+        // (handle(), guest()); only a real status link can be looked up
+        const text = await tweetText(url, why)
+        if (text !== undefined) throw new Tweet(text, why)
         // an untagged error needs the extractors that claim the link
         const ies = /^(ERROR: )?\[/.test(why)
           ? []
@@ -1634,6 +1689,23 @@ function main() {
     } catch (e) {
       ended = true
       console.error('failed', url, (e as Error).message)
+      // A no-media tweet's text goes out in the video's place: a final answer,
+      // so it waits out a flood (the api's floodWait), not skipped as progress
+      if (e instanceof Tweet && e.text) {
+        const text = e.text
+        await then(async () => {
+          if (cut) return
+          if (statusId) await ctx.api.deleteMessage(ctx.chat!.id, statusId).catch(() => {})
+          statusId = undefined
+          await ctx.api.sendMessage(ctx.chat!.id, text, {
+            reply_parameters: {
+              message_id: ctx.msg!.message_id,
+              allow_sending_without_reply: true,
+            },
+          })
+        }).catch(() => {})
+        return
+      }
       const key = answer(
         e instanceof Fail ? e.key : 'failed',
         ctx.chat!.type,
@@ -1694,6 +1766,26 @@ function main() {
               (m) => m.inline_message_id,
               (e) => void console.error('guest answer failed', url, (e as Error).message),
             ))
+    }
+    // The same, with the text itself (a no-media tweet's post, sent in the
+    // video's place): it always goes out, even when it equals what's shown
+    const sayText = (text: string) => {
+      if (reply)
+        return reply.then(async (id) => {
+          if (id) await ctx.api.editMessageTextInline(id, text).catch(() => {})
+          return id
+        })
+      return (reply = ctx
+        .answerGuestQuery({
+          type: 'article',
+          id: 'status',
+          title: ctx.me.first_name,
+          input_message_content: { message_text: text },
+        })
+        .then(
+          (m) => m.inline_message_id,
+          (e) => void console.error('guest answer failed', url, (e as Error).message),
+        ))
     }
     // How much longer the answer to one that doesn't mention the bot may wait
     // for -J, in ms (below)
@@ -1758,6 +1850,11 @@ function main() {
     } catch (e) {
       late?.()
       console.error('guest failed', url, (e as Error).message)
+      // A no-media tweet's text goes out in the video's place
+      if (e instanceof Tweet && e.text) {
+        await sayText(e.text).catch(() => {})
+        return
+      }
       const key = e instanceof Fail ? e.key : 'failed'
       // once answered it hears what went wrong, as a mention does
       const told = reply ? key || 'failed' : unasked(key, (e as Error).message)

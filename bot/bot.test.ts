@@ -1,4 +1,4 @@
-import { expect, test } from 'bun:test'
+import { expect, mock, test } from 'bun:test'
 import { Api, InputFile, type Transformer } from 'grammy'
 import type { Message } from 'grammy/types'
 import { Database } from 'bun:sqlite'
@@ -35,6 +35,8 @@ import {
   tellQueued,
   THUMB,
   Timeout,
+  tweetText,
+  Tweet,
   unasked,
   unready,
   unsend,
@@ -389,6 +391,86 @@ test("unasked: a guest message that doesn't mention the bot, not answered yet, h
   for (const [why, ies] of broken) expect(unasked(notVideo(why, ies) ? null : 'failed', why)).toBe('failed')
   expect(unasked('tooBig')).toBe('tooBig')
   expect(unasked(unready({ is_live: true }))).toBe('live')
+})
+
+const TWEET_ERR = 'ERROR: [twitter] 1733864556483543420: No video could be found in this tweet'
+
+test('Tweet: its text stays quiet everywhere; a post that is gone hears tweetNotFound where a failure would', () => {
+  const gone = new Tweet(null, TWEET_ERR)
+  expect(gone.key).toBe('tweetNotFound')
+  const texted = new Tweet('hello', TWEET_ERR)
+  expect(texted.key).toBeNull()
+  // the text is what goes out; the key is only for the no-text case
+  expect(texted.text).toBe('hello')
+  // a gone post: a private chat or a summon hears so, a group stays quiet
+  expect(answer(gone.key, 'private', false, TWEET_ERR)).toBe('tweetNotFound')
+  expect(answer(gone.key, 'group', true, TWEET_ERR)).toBe('tweetNotFound')
+  expect(answer(gone.key, 'group', false, TWEET_ERR)).toBeNull()
+  expect(answer(gone.key, 'supergroup', false, TWEET_ERR)).toBeNull()
+  // a guest hears what a group would (nothing about a gone post)
+  expect(unasked(gone.key, TWEET_ERR)).toBeNull()
+  // a post whose text went out is answered by the text, not by a key: its
+  // key is null and a null key on a tweet error is never answered
+  expect(answer(texted.key, 'private', true, TWEET_ERR)).toBeNull()
+})
+
+test('tweetText: only a no-media tweet on a status host; its post, or null', async () => {
+  const real = globalThis.fetch
+  const noMedia = 'ERROR: [twitter] 1: No video could be found in this tweet'
+  const fail = 'ERROR: [twitter] 1: Could not download webpage'
+  try {
+    // not a no-media tweet, or not a status link: untouched (undefined)
+    expect(await tweetText('https://x.com/a/status/1', fail)).toBeUndefined()
+    expect(await tweetText('https://x.com/a/with_photo_mode/1', noMedia)).toBeUndefined()
+    expect(await tweetText('https://www.youtube.com/watch?v=tweet5', noMedia)).toBeUndefined()
+    // a post: its text, author, link and photo links; a /photo/1 or ?s= link
+    // is the same status and matches too
+    globalThis.fetch = (mock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            code: 200,
+            tweet: {
+              id: '123',
+              text: 'hi there',
+              author: { screen_name: 'alice' },
+              media: { photos: [{ url: 'https://p/1.jpg' }] },
+            },
+          }),
+        ),
+      ),
+    )) as typeof fetch
+    await expect(tweetText('https://x.com/alice/status/123', noMedia)).resolves.toBe(
+      'hi there\n@alice\nhttps://x.com/alice/status/123\nhttps://p/1.jpg',
+    )
+    // a photo-only post, and a text-only one
+    globalThis.fetch = (mock(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            code: 200,
+            tweet: { id: '2', text: '', author: { screen_name: 'bob' }, media: { photos: [{ url: 'https://p/2.jpg' }] } },
+          }),
+        ),
+      ),
+    )) as typeof fetch
+    await expect(tweetText('https://twitter.com/bob/status/2', noMedia)).resolves.toBe(
+      '@bob\nhttps://x.com/bob/status/2\nhttps://p/2.jpg',
+    )
+    // the post is gone (no text and no photos): null
+    globalThis.fetch = (mock(() =>
+      Promise.resolve(new Response(JSON.stringify({ code: 200, tweet: { id: '3', text: '', author: { screen_name: 'c' } } }))),
+    )) as typeof fetch
+    await expect(tweetText('https://x.com/c/status/3', noMedia)).resolves.toBeNull()
+    // the API says no: null
+    globalThis.fetch = (mock(() => Promise.resolve(new Response(JSON.stringify({ code: 404 })))) as typeof fetch) as typeof fetch
+    await expect(tweetText('https://x.com/c/status/3', noMedia)).resolves.toBeNull()
+    // the API can't be reached: null
+    globalThis.fetch = (mock(() => Promise.reject(new Error('offline'))) as typeof fetch) as typeof fetch
+    await expect(tweetText('https://x.com/c/status/3', noMedia)).resolves.toBeNull()
+  } finally {
+    globalThis.fetch = real
+  }
 })
 
 test("deadline: without GUEST_GATES it's a timer, at once when the time is up already, and never fires once called off", async () => {
