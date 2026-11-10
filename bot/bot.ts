@@ -1,6 +1,6 @@
 import { Database } from 'bun:sqlite'
-import { type Api, Bot, type Context, GrammyError, InputFile, type Transformer } from 'grammy'
-import type { ApiResponse, InputMediaVideo, Message } from 'grammy/types'
+import { type Api, Bot, Context, GrammyError, InputFile, type Transformer } from 'grammy'
+import type { ApiResponse, InlineKeyboardButton, InputMediaVideo, Message } from 'grammy/types'
 import { existsSync, rmSync, writeFileSync } from 'node:fs'
 import { chmod, copyFile, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -71,8 +71,54 @@ export const YTDLP = [
   '--merge-output-format', 'mp4',
 ]
 
+// The quality a YouTube link is offered (a menu the user picks from). Off in
+// tests (no E2E_PARENT_PID), where a bare YouTube link must download at once,
+// so a bot run with E2E_PARENT_PID set skips the menu (menu(), below).
+export type Quality = 'best' | '720' | 'audio' | 'transcript'
+// Each quality's yt-dlp args: the format (and, for audio, the extraction),
+// replacing YTDLP's -f/-S/merge. 'best' is the default (YTDLP as-is).
+export const qualityArgs = (q: Quality) =>
+  q === 'best'
+    ? []
+    : q === '720'
+      ? ['-f', `bv*[height<=720]${PROTOCOLS}+ba${PROTOCOLS}/b[height<=720]${PROTOCOLS}`, '-S', 'vcodec:h264,res:720,acodec:m4a', '--merge-output-format', 'mp4']
+      : q === 'audio'
+        ? ['-f', `ba${PROTOCOLS}/b${PROTOCOLS}`, '-x', '--audio-format', 'm4a', '--audio-quality', '0']
+        : ['--skip-download', '--write-subs', '--write-auto-subs', '--sub-langs', 'en,far,fa,ar']
+// What downloadProgress() reports: the bytes on disk now, of the total the
+// picked formats say the file weighs (undefined when yt-dlp doesn't say)
+export const downloadProgress = (have: number, total: number | undefined) =>
+  total && total > 0 ? Math.min(100, Math.max(0, Math.round((have / total) * 100))) : undefined
+// A YouTube link's video: a watch or short (a playlist, channel or live
+// handle isn't a single video the user would ask to download)
+export const youtubeVideo = (url: string) =>
+  /^https?:\/\/(www\.)?(youtube\.com\/(watch\?v=|shorts\/\w+)|youtu\.be\/\w+)/.test(url)
+// A WebVTT transcript, as plain text: the header, cue indexes and timestamps,
+// the styling tags and the cue settings are dropped, what's left is the words
+export const vttText = (vtt: string) => {
+  const lines = vtt.split(/\r?\n/)
+  // the file header (WEBVTT, Kind:, Language:) is the block before the first
+  // blank line: drop it, then the cues follow
+  let i = 0
+  while (i < lines.length && lines[i].trim() !== '') i++
+  i++ // and the blank line that ends it
+  const out: string[] = []
+  for (const raw of lines.slice(i)) {
+    const line = raw.replace(/<[^>]*>/g, '').replace(/\{[^}]*\}/g, '').trim()
+    if (!line) continue
+    if (/^(NOTE|STYLE|REGION)/.test(line)) continue
+    if (line.includes('-->')) continue
+    if (/^(Align|Line|Position|Size|Vertical|::)/.test(line)) continue
+    if (/^[\d.,:\s-]+$/.test(line)) continue // a timestamp or a bare cue index
+    out.push(line)
+  }
+  return out.join('\n').trim()
+}
+
 type Kind = 'video' | 'animation' | 'audio' | 'document'
-type File = { kind: Kind; file_id: string; title: string; url: string }
+// text = a transcript (the quality 'transcript'): no file, the words sent in
+// the video's place. file_id is '' (a transcript is never sent as a file)
+type File = { kind: Kind; file_id: string; title: string; url: string; text?: string }
 type Opts = Parameters<Context['api']['sendVideo']>[2] &
   Parameters<Context['api']['sendAudio']>[2]
 // Where a file goes: a chat, replying to a message there, with a promo line
@@ -89,6 +135,13 @@ type Dest = {
   stale?: { message: number; file_id: string }
   who?: number
   uploading?: boolean
+  quality?: Quality
+  // The file's MB, set by job() just before it says "uploading": the status
+  // shows the size, as the API reports no upload progress of its own
+  uploadMb?: number
+  // Told the download's percent (and MB) as it goes; handle() wires it to a
+  // status edit. Read only, never edited once set.
+  onProgress?: (pct: number | undefined, mb: number) => void
 }
 // Guest replies can't upload, so their files go through this chat first
 // (the message is deleted right after, the file_id stays valid)
@@ -766,8 +819,13 @@ export const saved = (v: any, json: string) => (isVideo(v) ? JSON.stringify(v) :
 export const samePick = (a: any, b: any) =>
   isVideo(a) && isVideo(b) && JSON.stringify(files(a)) === JSON.stringify(files(b))
 
-// The key a video's file is cached under, whatever link led to it
-const cacheKey = (v: any) => `${v.extractor_key}:${v.id}`
+// The key a video's file is cached under, whatever link led to it: the
+// video's own (site and id) plus the quality it was downloaded as. 'best' is
+// the plain download (qualityArgs('best') is empty), so it gets no suffix —
+// a 720p or audio copy must not go out where the best one was asked for, and
+// a transcript is never cached (its File has no file_id)
+export const cacheKey = (v: any, quality?: Quality) =>
+  `${v.extractor_key}:${v.id}${quality && quality !== 'best' ? ':' + quality : ''}`
 
 // The slots for downloading and sending videos. Long ones (20-40 min each on
 // some sites) take at most MAX_DOWNLOADS - 1 of them (with one slot, that
@@ -1300,7 +1358,9 @@ function main() {
     }
     try {
       await SCRATCH.open(dir)
-      let args = [...YTDLP, ...(await jar(dir))]
+      const quality = dest.quality
+      const base = quality ? [...YTDLP, ...qualityArgs(quality)] : YTDLP
+      let args = [...base, ...(await jar(dir))]
       let json: string
       const asked = Date.now()
       await wait(meta.busy(false, dest.who))
@@ -1336,7 +1396,7 @@ function main() {
       // The video and the key it's cached under: the page read again may
       // pick another one (again())
       let v = picked(JSON.parse(json))
-      let id = cacheKey(v)
+      let id = cacheKey(v, quality)
       // The video may be cached under another link, or get cached by another
       // job while this one waits; a refresh wants a new upload, not another
       // cached copy
@@ -1360,9 +1420,9 @@ function main() {
       const vet = async (pick: any) => {
         const stream = unready(pick)
         if (stream) throw new Fail(stream, `${stream} stream`)
-        if (dest.stale && get(cacheKey(pick))?.file_id !== dest.stale.file_id)
+        if (dest.stale && get(cacheKey(pick, quality))?.file_id !== dest.stale.file_id)
           throw new Fail(null, 'another video')
-        const hit = await fromCache(cacheKey(pick))
+        const hit = await fromCache(cacheKey(pick, quality))
         if (hit) return hit
         const size = sizes(pick).reduce<number>((all, n) => all + (n ?? 0), 0)
         if (size > LIMIT) throw new Fail('tooBig')
@@ -1383,7 +1443,7 @@ function main() {
       if (sent) return sent
       // another run may have saved newer cookies while this one waited
       if (taken.has(dir) && (await stat(JAR)).mtimeMs !== taken.get(dir))
-        args = [...YTDLP, ...(await jar(dir))]
+        args = [...base, ...(await jar(dir))]
 
       await status('downloading')
       await Bun.write(join(dir, 'info.json'), saved(v, json))
@@ -1397,9 +1457,16 @@ function main() {
       // one just over LIMIT, which the remux into MP4 would shrink a few %
       // under it, stops too.
       const big = new AbortController()
+      // How far the download is, for the chat's status: the picked formats'
+      // total size (the transcript has no file), and the callback that tells
+      // it (handle() wires it to a status edit; undefined elsewhere)
+      const total = quality === 'transcript' ? undefined : sizes(v).reduce<number>((all, n) => all + (n ?? 0), 0) || undefined
+      const report = dest.onProgress ?? (() => {})
       const weigh = setInterval(async () => {
-        if ((await biggest(dir)) > LIMIT)
+        const b = await biggest(dir)
+        if (b > LIMIT)
           big.abort(new Fail('tooBig', `a file over ${LIMIT >> 20} MB`))
+        else report(downloadProgress(b, total), Math.round(b / 2 ** 20))
       }, MINUTE / 12)
       const grab = (source: string[], timeout: number) =>
         ytdlp(
@@ -1435,12 +1502,12 @@ function main() {
         const same = samePick(v, pick)
         log[same ? 'kept' : 'dropped'] = await onDisk(dir)
         if (!same) await drop(dir)
-        if (cacheKey(pick) !== id) {
+        if (cacheKey(pick, quality) !== id) {
           log.other = 1
           const hit = await vet(pick)
           if (hit) return hit
           v = pick
-          id = cacheKey(pick)
+          id = cacheKey(pick, quality)
         }
         await Bun.write(join(dir, 'info.json'), saved(pick, page))
         return grab(['--load-info-json', join(dir, 'info.json')], left - (Date.now() - reading))
@@ -1472,6 +1539,20 @@ function main() {
       log.dl = elapsed(fetched)
       // the page read again picked another video, which went out from the cache
       if ('file_id' in got) return got
+      // The transcript: a video with no file, the subtitles written instead.
+      // Manual subs win over auto ones (yt-dlp names the auto ones -orig when
+      // both are written). Sent as plain text (vttText) in the video's place,
+      // split to the message length, and not cached (the files table holds
+      // media file_ids, not text).
+      if (quality === 'transcript') {
+        const sub = (await media(dir)).filter((f) => f.name.endsWith('.vtt'))
+        const manual = sub.find((f) => !f.name.endsWith('-orig.vtt'))
+        const vtt = manual ?? sub[0]
+        if (!vtt) throw new Fail('failed', 'no transcript for this video')
+        const text = vttText((await Bun.file(join(dir, vtt.name)).text()).trim())
+        if (!text) throw new Fail('failed', 'no transcript for this video')
+        return { kind: 'document', file_id: '', title: v.title || 'Transcript', url: v.webpage_url || url, text }
+      }
       const { out, err } = got
       const path = out.trim().split('\n').pop()
       // --print implies --quiet, so a file over --max-filesize is skipped
@@ -1484,10 +1565,12 @@ function main() {
       log.mb = Math.round(bytes / 2 ** 20)
       if (bytes > LIMIT) throw new Fail('tooBig')
 
+      // the upload's line shows the size (the API reports no progress)
+      dest.uploadMb = Math.max(1, Math.round(bytes / 2 ** 20))
       const sending = Date.now()
       await status('uploading')
       await SCRATCH.open(path, true)
-      const audio = v.vcodec === 'none'
+      const audio = quality === 'audio' || v.vcodec === 'none'
       const thumb = join(dir, 'thumb.jpg')
       const box = audio ? undefined : await probe(path)
       if (!audio)
@@ -1608,24 +1691,78 @@ function main() {
     }
   }
 
-  async function handle(ctx: Context, url: string) {
+  // The quality a YouTube link is offered. The bot answers a bare YouTube
+  // video link with a menu (best / 720p / audio / transcript) instead of
+  // downloading at once, unless it was summoned (the user named it, so the
+  // link is what they want) or another link in the same message made it not
+  // the sole thing asked. Off in a bot run with E2E_PARENT_PID (tests, where
+  // a bare link must download at once).
+  const offerMenu = (ctx: Context, url: string, wanted: string[]) =>
+    !env.E2E_PARENT_PID &&
+    ctx.chat!.type === 'private' &&
+    wanted.length === 1 &&
+    youtubeVideo(url) &&
+    !summoned(ctx.msg!, ctx.me.username)
+  // A menu up now, by chat + message: the link it offers. The button's
+  // callback_data is the quality alone (a URL in it would pass Telegram's
+  // 64-byte limit); a tap looks the link up here. A menu that no one taps
+  // drops off by itself (30 min).
+  const menuLinks = new Map<string, string>()
+  const menuKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.msg!.message_id}`
+  const answerMenu = (ctx: Context, url: string) => {
+    const key = menuKey(ctx)
+    const lang = ctx.from?.language_code ?? 'en'
+    menuLinks.set(key, url)
+    setTimeout(() => {
+      if (menuLinks.get(key) === url) menuLinks.delete(key)
+    }, 30 * 60_000)
+    const board: InlineKeyboardButton[][] = [
+      [
+        { text: t(lang, 'qBest'), callback_data: 'q:best' },
+        { text: t(lang, 'q720'), callback_data: 'q:720' },
+      ],
+      [
+        { text: t(lang, 'qAudio'), callback_data: 'q:audio' },
+        { text: t(lang, 'qTranscript'), callback_data: 'q:transcript' },
+      ],
+    ]
+    void track(
+      ctx
+        .reply(t(lang, 'qualityMenu'), {
+          reply_parameters: { message_id: ctx.msg!.message_id, allow_sending_without_reply: true },
+          reply_markup: { inline_keyboard: board },
+        })
+        .catch(() => {
+          menuLinks.delete(key)
+          console.error('menu failed', url)
+        }),
+    )
+  }
+  // A menu button's tap: the quality, or undefined when the callback is not
+  // the bot's menu (another bot's, or the user's own)
+  const qualityTap = (data: string): Quality | undefined =>
+    /^(q:best|q:720|q:audio|q:transcript)$/.test(data) ? (data.slice(2) as Quality) : undefined
+
+  async function handle(ctx: Context, url: string, quality?: Quality) {
     const lang = ctx.from?.language_code
     let statusId: number | undefined
-    const show = async (key: Key, follow = false, signal?: Signal) => {
+    // text overrides the key's line (the upload's size)
+    const show = async (key: Key, follow = false, signal?: Signal, text?: string) => {
       if (
         !statusId &&
         (follow || key === 'queued' || key === 'restarting') &&
         !tellQueued(ctx.chat!.type, summoned(ctx.msg!, ctx.me.username))
       )
         return
+      const line = text ?? t(lang, key)
       if (statusId)
         await ctx.api
-          .editMessageText(ctx.chat!.id, statusId, t(lang, key), undefined, signal)
+          .editMessageText(ctx.chat!.id, statusId, line, undefined, signal)
           .catch(() => {})
       else
         statusId = (
           await ctx.reply(
-            t(lang, key),
+            line,
             {
               reply_parameters: {
                 message_id: ctx.msg!.message_id,
@@ -1645,12 +1782,46 @@ function main() {
       return p
     }
     let cut = false
+    let lastProgress = ''
+    let progressing = true
     // progress isn't worth a flood wait; the answer to a failure still waits
     // its turn
-    const status = (key: Key, follow = false) =>
-      then(() =>
-        cut ? Promise.resolve() : progress(flood.flooded(ctx.chat!.id), (signal) => show(key, follow, signal)),
+    const status = (key: Key, follow = false) => {
+      // past the download (the upload begins, or the exit restarts), the
+      // percent no longer applies: the last one stays up until the video goes
+      if (key === 'uploading' || key === 'restarting') progressing = false
+      // the API reports no upload progress, so the upload's line shows the
+      // size, as the download's shows its percent
+      const text =
+        key === 'uploading' && dest.uploadMb !== undefined
+          ? `${t(lang, 'uploading')} ${dest.uploadMb} MB`
+          : undefined
+      return then(() =>
+        cut ? Promise.resolve() : progress(flood.flooded(ctx.chat!.id), (signal) => show(key, follow, signal, text)),
       )
+    }
+    // The download's live percent, from the job's weigh (job() reads
+    // dest.onProgress): it overwrites the "Downloading…" status until the
+    // video goes out. A flood skips a tick (progress), the last one stays up.
+    const sayProgress = (pct: number | undefined, mb: number) => {
+      if (!progressing || (pct === undefined && mb === 0)) return
+      const text = pct !== undefined ? `${t(lang, 'downloading')} ${pct}% (${mb} MB)` : `${t(lang, 'downloading')} ${mb} MB`
+      if (text === lastProgress) return
+      lastProgress = text
+      void then(() =>
+        cut
+          ? Promise.resolve()
+          : progress(flood.flooded(ctx.chat!.id), async (signal) => {
+              if (statusId) {
+                await ctx.api.editMessageText(ctx.chat!.id, statusId, text, undefined, signal).catch(() => {})
+              } else {
+                statusId = (
+                  await ctx.reply(text, { reply_parameters: { message_id: ctx.msg!.message_id, allow_sending_without_reply: true } }, signal)
+                ).message_id
+              }
+            }),
+      ).catch(() => {})
+    }
     const d = ctx.from
       ? promo.decide(ctx.from.id, ctx.chat!.type, lang)
       : null
@@ -1660,6 +1831,8 @@ function main() {
       promo: d?.promo,
       // anonymous admins and channel posts all come from one bot user
       who: ctx.msg!.sender_chat?.id ?? ctx.from?.id,
+      onProgress: sayProgress,
+      quality,
     }
     // The exit cuts off a request whose job hasn't begun its upload (past
     // the cut none begins one: job()), "⏫" or not. A request that has ended
@@ -1677,13 +1850,50 @@ function main() {
       ).catch(() => {})
     }
     open.add(cutOff)
+    // A final text answer (a transcript, a no-media tweet's text), split to
+    // the 4 096-char message limit on line breaks: the status is gone first,
+    // the first part replies to the link, the rest follow it
+    const sendText = async (text: string) => {
+      if (cut) return
+      if (statusId) await ctx.api.deleteMessage(ctx.chat!.id, statusId).catch(() => {})
+      statusId = undefined
+      const parts: string[] = []
+      let cur = ''
+      for (const line of text.split('\n')) {
+        if (cur.length + line.length + 1 > 4_090 && cur) {
+          parts.push(cur)
+          cur = line
+        } else cur = cur ? cur + '\n' + line : line
+        if (line.length > 4_090) {
+          // one line longer than the limit (a tweet's, not a transcript's)
+          for (let i = 0; i < line.length; i += 4_090) parts.push(line.slice(i, i + 4_090))
+          cur = ''
+        }
+      }
+      if (cur) parts.push(cur)
+      for (let i = 0; i < parts.length; i++)
+        await ctx.api.sendMessage(ctx.chat!.id, parts[i], {
+          reply_parameters:
+            i === 0
+              ? { message_id: ctx.msg!.message_id, allow_sending_without_reply: true }
+              : undefined,
+        })
+    }
     try {
-      await deliver(dest, url, status)
+      const f = await deliver(dest, url, status)
       ended = true
       promo.record(d)
       if (ctx.from && ctx.chat!.type === 'private') promo.used(ctx.from.id)
       // a status still on its way is up before it goes, the exit's notice too
       await shown
+      // The transcript is the job's answer as text, not a file: it goes out
+      // in the video's place (a final answer, so it waits out a flood, like a
+      // tweet's text), after the status that showed the download
+      if (f.text) {
+        const text = f.text
+        await then(() => sendText(text)).catch(() => {})
+        return
+      }
       if (statusId)
         await ctx.api.deleteMessage(ctx.chat!.id, statusId).catch(() => {})
     } catch (e) {
@@ -1693,17 +1903,7 @@ function main() {
       // so it waits out a flood (the api's floodWait), not skipped as progress
       if (e instanceof Tweet && e.text) {
         const text = e.text
-        await then(async () => {
-          if (cut) return
-          if (statusId) await ctx.api.deleteMessage(ctx.chat!.id, statusId).catch(() => {})
-          statusId = undefined
-          await ctx.api.sendMessage(ctx.chat!.id, text, {
-            reply_parameters: {
-              message_id: ctx.msg!.message_id,
-              allow_sending_without_reply: true,
-            },
-          })
-        }).catch(() => {})
+        await then(() => sendText(text)).catch(() => {})
         return
       }
       const key = answer(
@@ -1893,11 +2093,45 @@ function main() {
     // a throw that gets past handle()'s own catch is logged, as unhandled it
     // would end the bot
     void track(
-      requested(ctx.msg, me, ctx.chat.type)
-        .then((wanted) => wanted.forEach((url) => void track(handle(ctx, url).catch(console.error))))
-        .catch(console.error),
+      requested(ctx.msg, me, ctx.chat.type).then((wanted) => {
+        // a bare YouTube video link (private, not summoned) offers the quality
+        // menu instead of downloading at once: the user taps best / 720p /
+        // audio / transcript
+        if (wanted.length === 1 && offerMenu(ctx, wanted[0], wanted)) {
+          answerMenu(ctx, wanted[0])
+          return
+        }
+        wanted.forEach((url) => void track(handle(ctx, url).catch(console.error)))
+      }),
     )
     if (!found.length && ctx.chat.type === 'private') help(ctx)
+  })
+  // A tap on the quality menu: the quality, and the link the menu was for.
+  // The tap's message is the menu; its reply is the link the menu offered,
+  // which becomes the message the download's status replies to (a fresh
+  // Context on it, as the tap's own is a callback, not a message)
+  bot.on('callback_query', (ctx) => {
+    const data = ctx.callbackQuery.data
+    const q = data ? qualityTap(data) : undefined
+    const menu = ctx.callbackQuery.message
+    if (!q || !menu) return
+    const src = menu.reply_to_message
+    // the menu was keyed by the link's message id (answerMenu), so look it up
+    // by the link, not the menu
+    const url = src ? menuLinks.get(`${ctx.chat!.id}:${src.message_id}`) : undefined
+    if (!src || !url) return
+    void track(
+      ctx
+        .answerCallbackQuery()
+        .then(async () => {
+          menuLinks.delete(`${ctx.chat!.id}:${src.message_id}`)
+          // the menu's buttons are spent; take the menu down
+          await ctx.api.deleteMessage(ctx.chat!.id, menu.message_id).catch(() => {})
+          const fresh = new Context({ update_id: 0, message: src } as any, bot.api, ctx.me)
+          void track(handle(fresh, url, q).catch(console.error))
+        })
+        .catch(() => {}),
+    )
   })
   bot.on('guest_message', (ctx) => void track(guest(ctx).catch(console.error)))
   bot.on('my_chat_member', (ctx) => {
@@ -1949,7 +2183,7 @@ function main() {
         setInterval(keepalive, 6 * 3600_000)
         void keepalive()
         return bot.start({
-          allowed_updates: ['message', 'guest_message', 'my_chat_member'],
+          allowed_updates: ['message', 'guest_message', 'my_chat_member', 'callback_query'],
           onStart: (me) => console.log(`@${me.username} up, uploads ≤ ${LIMIT >> 20} MB`),
         })
       },

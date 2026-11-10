@@ -26,18 +26,29 @@ tg-media-bot/
 │   └── install-linux.sh     # one-shot install on a Linux host
 ├── .github/workflows/ci.yml # auto tests on every push
 ├── .env.example             # config template
-└── README.md
+├── README.md
+└── ROADMAP.md               # researched future work
 ```
 
 ## Features
 
 - Send a link → get the file back (video/audio/animation), type auto-detected
 - Every site supported by [yt-dlp](https://github.com/yt-dlp/yt-dlp) (1000+)
+- **Quality menu** for YouTube links (private chat, one tap): best video,
+  720p, audio only, or transcript
+- **Transcripts**: a YouTube link's subtitles (manual preferred over
+  auto-generated, `en,far,fa,ar`) come back as text
+- **No-media tweets**: an X/Twitter post without video/media returns the post
+  text
+- **Live progress**: real download percentage (file size of the picked
+  formats) and the file size shown while uploading
 - Uploads up to **2 GB** via a local Bot API server (`--local`)
-- Cache: an already-downloaded link is returned instantly (SQLite)
+- Cache: an already-downloaded link is returned instantly (SQLite), per
+  quality
 - Download queue, Telegram flood-control handling, works in groups and private
 - yt-dlp auto-update (disable with `YTDLP_UPDATE=off`)
-- Multilingual replies (`i18n.ts` — adding more languages is on the backlog)
+- Multilingual replies (`i18n.ts` — 8 languages)
+- Future work: see [ROADMAP.md](ROADMAP.md)
 
 ## Prerequisites
 
@@ -130,10 +141,11 @@ CI runs on every push (`.github/workflows/ci.yml`).
 
 ## Backlog
 
-- [ ] **MP3** output (extract audio)
-- [ ] **Text output**: a tweet/post link with no video → send the post text
+See [ROADMAP.md](ROADMAP.md) for the researched future work (groups and
+channels, welcome message, language selection, main menu, webhook, ideas from
+@uploadbot). Still open, in short:
+
 - [ ] user **whitelist**
-- [ ] more languages in `i18n.ts`
 - [ ] speech-to-text transcription (optional)
 
 ## License

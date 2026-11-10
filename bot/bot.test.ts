@@ -23,8 +23,11 @@ import {
   probe,
   progress,
   PROGRESS,
+  qualityArgs,
+  downloadProgress,
   requested,
   reread,
+  cacheKey,
   samePick,
   saved,
   selfUpdate,
@@ -44,6 +47,8 @@ import {
   updateOnce,
   urls,
   videos,
+  vttText,
+  youtubeVideo,
 } from './bot'
 import { lang, t } from './i18n'
 
@@ -1589,4 +1594,68 @@ test('selfUpdate: the first try is over before its retries, which go on meanwhil
   resume.resolve()
   await retries
   expect(tries).toBe(2)
+})
+
+test('youtubeVideo: a watch or short is a video, a playlist or channel is not', () => {
+  expect(youtubeVideo('https://www.youtube.com/watch?v=abc123')).toBe(true)
+  expect(youtubeVideo('https://youtube.com/watch?v=abc123&t=10s')).toBe(true)
+  expect(youtubeVideo('https://youtu.be/abc123')).toBe(true)
+  expect(youtubeVideo('https://www.youtube.com/shorts/abc123')).toBe(true)
+  expect(youtubeVideo('https://youtube.com/playlist?list=PLabc')).toBe(false)
+  expect(youtubeVideo('https://www.youtube.com/@channel')).toBe(false)
+  expect(youtubeVideo('https://www.instagram.com/reel/abc/')).toBe(false)
+  expect(youtubeVideo('https://vimeo.com/123')).toBe(false)
+})
+
+test('qualityArgs: best is plain, the others carry their own format', () => {
+  expect(qualityArgs('best')).toEqual([])
+  const fmt = (q: string) => {
+    const a = qualityArgs(q as any)
+    return a[a.indexOf('-f') + 1]
+  }
+  expect(fmt('720')).toContain('bv*[height<=720]')
+  expect(qualityArgs('720').join(' ')).toContain('res:720')
+  expect(qualityArgs('audio')).toContain('-x')
+  expect(fmt('audio')).toContain('ba[protocol')
+  expect(qualityArgs('audio').join(' ')).toContain('--audio-format m4a')
+  expect(qualityArgs('transcript')).toContain('--skip-download')
+  expect(qualityArgs('transcript')).toContain('--write-auto-subs')
+  expect(qualityArgs('transcript')).toContain('en,far,fa,ar')
+})
+
+test('downloadProgress: a percent of the total, clamped; nothing when the total is unknown', () => {
+  expect(downloadProgress(50, 200)).toBe(25)
+  expect(downloadProgress(200, 200)).toBe(100)
+  expect(downloadProgress(400, 200)).toBe(100)
+  expect(downloadProgress(0, 200)).toBe(0)
+  expect(downloadProgress(50, undefined)).toBeUndefined()
+  expect(downloadProgress(50, 0)).toBeUndefined()
+})
+
+test('vttText: the words, not the header, timestamps, tags or settings', () => {
+  const vtt = `WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.000
+Hello <b>world</b>
+
+2
+00:00:02.000 --> 00:00:04.000 align:start position:0%
+مرحبا {\\an8}
+
+NOTE a comment
+STYLE
+::cue { color: red }`
+  expect(vttText(vtt)).toBe('Hello world\nمرحبا')
+})
+
+test('cacheKey: the quality is part of the key, so 720p is not the best', () => {
+  const v = { extractor_key: 'Youtube', id: 'abc' }
+  expect(cacheKey(v)).toBe('Youtube:abc')
+  expect(cacheKey(v, 'best')).toBe('Youtube:abc') // best is the plain download
+  expect(cacheKey(v, '720')).toBe('Youtube:abc:720')
+  expect(cacheKey(v, 'audio')).toBe('Youtube:abc:audio')
+  expect(cacheKey(v, '720')).not.toBe(cacheKey(v, 'audio'))
+  expect(cacheKey(v, 'best')).not.toBe(cacheKey(v, '720'))
 })
