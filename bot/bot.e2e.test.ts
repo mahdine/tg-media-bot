@@ -3284,7 +3284,7 @@ e2e(
     try {
       expect(db.query<{ kind: string }, [string]>('SELECT kind FROM files WHERE key = ?').get(link)?.kind).toBe('video')
       expect(db.query('SELECT 1 FROM files WHERE key = ?').get('Youtube:menubest1:720')).toBeTruthy()
-      expect(db.query("SELECT 1 FROM files WHERE key = ? AND kind = 'video'").get(`${link}:720`)).toBeUndefined()
+      expect(db.query('SELECT 1 FROM files WHERE key = ? AND kind = ?', [`${link}:720`, 'video'])).toBeNull()
     } finally {
       db.close()
       rmSync(data, { recursive: true, force: true })
