@@ -3359,7 +3359,7 @@ e2e(
       const l = bot.link(1, 'menutr1')!
       await bot.until(() => menus() === 1)
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l }, 'q:transcript:menutr1')
-      await bot.until(() => bot.reply(1).some((s) => s.includes('Hello world')))
+      await bot.until(() => bot.statuses(1).some((s) => s.includes('Hello world')))
       await bot.until(() => bot.jobs().some((j) => j.includes(' q=transcript ')))
       expect(bot.jobs().filter((j) => j.includes(' q=transcript ')).some((j) => j.startsWith('job ok '))).toBe(true)
       // the same link, one language throttled (a 429 on fa): the en that
@@ -3368,10 +3368,10 @@ e2e(
       const l2 = bot.link(1, 'menuthrottle2')!
       await bot.until(() => menus() === 2)
       bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:transcript:menuthrottle2')
-      await bot.until(() => bot.reply(1).filter((s) => s.includes('Hello world')).length === 2)
+      await bot.until(() => bot.statuses(1).filter((s) => s.includes('Hello world')).length === 2)
       await bot.until(() => bot.jobs().filter((j) => j.includes(' q=transcript ')).length === 2)
       expect(bot.jobs().filter((j) => j.includes(' q=transcript ')).every((j) => j.startsWith('job ok '))).toBe(true)
-      expect(bot.reply(1).some((s) => s.includes(t('en', 'failed')))).toBe(false)
+      expect(bot.statuses(1).some((s) => s.includes(t('en', 'failed')))).toBe(false)
     } finally {
       jobs = await bot.stop()
       db.close()
