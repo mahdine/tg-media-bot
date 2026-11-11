@@ -85,6 +85,32 @@ export const qualityArgs = (q: Quality) =>
       : q === 'audio'
         ? ['-f', `ba${PROTOCOLS}/b${PROTOCOLS}`, '-x', '--audio-format', 'm4a', '--audio-quality', '0']
         : ['--skip-download', '--write-subs', '--write-auto-subs', '--sub-langs', 'en,far,fa,ar']
+// A transcript's subtitle, chosen from what yt-dlp left on disk: a manual
+// sub beats an auto one (yt-dlp names the auto ones -orig when both are
+// written), and the languages in the --sub-langs list go in their order —
+// YouTube throttles the auto-caption endpoints (an HTTP 429 on one fails the
+// run, the others already written), so the best of what came through is the
+// answer
+export const pickSub = (names: string[]) => {
+  const sub = names.filter((n) => n.endsWith('.vtt'))
+  const manual = sub.filter((n) => !n.endsWith('-orig.vtt'))
+  const pool = manual.length ? manual : sub
+  if (!pool.length) return undefined
+  const rank = (n: string): [number, string] => {
+    // yt-dlp names the auto ones -orig: <title> [id].<lang>-orig.vtt
+    const base = n.endsWith('-orig.vtt') ? n.slice(0, -'-orig.vtt'.length) : n.slice(0, -'.vtt'.length)
+    // the language's first segment: fa, far, en, ar (an auto one's -orig and
+    // any -alt form go with it)
+    const lang = base.slice(base.lastIndexOf('.') + 1).split('-')[0]!
+    const i = ['fa', 'far', 'en', 'ar'].indexOf(lang)
+    return [i < 0 ? 4 : i, n]
+  }
+  return [...pool].sort((a, b) => {
+    const ra = rank(a)
+    const rb = rank(b)
+    return ra[0] - rb[0] || (ra[1] < rb[1] ? -1 : ra[1] > rb[1] ? 1 : 0)
+  })[0]!
+}
 // What downloadProgress() reports: the bytes on disk now, of the total the
 // picked formats say the file weighs (undefined when yt-dlp doesn't say)
 export const downloadProgress = (have: number, total: number | undefined) =>
@@ -1536,6 +1562,21 @@ function main() {
           return again(left)
         })
         .catch(async (e) => {
+          // a transcript whose run failed on one throttled language (YouTube
+          // answers its auto-caption endpoint with a 429) still has the
+          // languages it got before the 429, written to the dir
+          if (quality === 'transcript') {
+            const sub = (await readdir(dir).catch(() => [])).filter((n) => n.endsWith('.vtt'))
+            const vtt = pickSub(sub)
+            if (vtt) {
+              log.subs = sub.length
+              const text = vttText((await Bun.file(join(dir, vtt)).text()).trim())
+              if (text) {
+                const file: File = { kind: 'document', file_id: '', title: v.title || 'Transcript', url: v.webpage_url || url, text }
+                return file
+              }
+            }
+          }
           // how far a failed download got, for the site's speed
           log.dl = elapsed(fetched)
           log.mb = await onDisk(dir)
@@ -1546,16 +1587,17 @@ function main() {
       // the page read again picked another video, which went out from the cache
       if ('file_id' in got) return got
       // The transcript: a video with no file, the subtitles written instead.
-      // Manual subs win over auto ones (yt-dlp names the auto ones -orig when
-      // both are written). Sent as plain text (vttText) in the video's place,
-      // split to the message length, and not cached (the files table holds
-      // media file_ids, not text).
+      // yt-dlp names them after the video's title, not the -o template, so
+      // every .vtt in the dir is scanned; pickSub orders them (a manual sub
+      // wins, then the --sub-langs order). Sent as plain text (vttText) in
+      // the video's place, split to the message length, and not cached (the
+      // files table holds media file_ids, not text).
       if (quality === 'transcript') {
-        const sub = (await media(dir)).filter((f) => f.name.endsWith('.vtt'))
-        const manual = sub.find((f) => !f.name.endsWith('-orig.vtt'))
-        const vtt = manual ?? sub[0]
+        const sub = (await readdir(dir).catch(() => [])).filter((n) => n.endsWith('.vtt'))
+        const vtt = pickSub(sub)
         if (!vtt) throw new Fail('failed', 'no transcript for this video')
-        const text = vttText((await Bun.file(join(dir, vtt.name)).text()).trim())
+        log.subs = sub.length
+        const text = vttText((await Bun.file(join(dir, vtt)).text()).trim())
         if (!text) throw new Fail('failed', 'no transcript for this video')
         return { kind: 'document', file_id: '', title: v.title || 'Transcript', url: v.webpage_url || url, text }
       }

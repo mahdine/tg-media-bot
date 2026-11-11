@@ -49,6 +49,7 @@ import {
   videos,
   vttText,
   youtubeVideo,
+  pickSub,
 } from './bot'
 import { lang, t } from './i18n'
 
@@ -1658,4 +1659,22 @@ test('cacheKey: the quality is part of the key, so 720p is not the best', () => 
   expect(cacheKey(v, 'audio')).toBe('Youtube:abc:audio')
   expect(cacheKey(v, '720')).not.toBe(cacheKey(v, 'audio'))
   expect(cacheKey(v, 'best')).not.toBe(cacheKey(v, '720'))
+})
+
+test('pickSub: a manual sub beats an auto one, then the --sub-langs order', () => {
+  const t = 'My video [abc123]'
+  expect(pickSub([])).toBeUndefined()
+  expect(pickSub(['info.json', 'v.mp4'])).toBeUndefined()
+  // one language alone
+  expect(pickSub([`${t}.en.vtt`])).toBe(`${t}.en.vtt`)
+  // the requested order: fa, far, en, ar
+  expect(pickSub([`${t}.ar.vtt`, `${t}.en.vtt`])).toBe(`${t}.en.vtt`)
+  expect(pickSub([`${t}.ar.vtt`, `${t}.en.vtt`, `${t}.far.vtt`])).toBe(`${t}.far.vtt`)
+  expect(pickSub([`${t}.en.vtt`, `${t}.fa.vtt`])).toBe(`${t}.fa.vtt`)
+  // a manual sub wins over any auto one
+  expect(pickSub([`${t}.en-orig.vtt`, `${t}.fa.vtt`])).toBe(`${t}.fa.vtt`)
+  // only auto ones: still the best of them
+  expect(pickSub([`${t}.ar-orig.vtt`, `${t}.en-orig.vtt`])).toBe(`${t}.en-orig.vtt`)
+  // a language outside the list loses to a requested one
+  expect(pickSub([`${t}.de.vtt`, `${t}.en.vtt`])).toBe(`${t}.en.vtt`)
 })

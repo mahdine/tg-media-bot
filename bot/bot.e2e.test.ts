@@ -3344,3 +3344,40 @@ e2e(
   },
   25_000,
 )
+
+e2e(
+  "bot: a transcript goes out as the subtitle's text, and when one language's captions 429 the best that came through still goes",
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const db = new Database(join(data, 'bot.sqlite'))
+    db.close()
+    const menus = () => bot.calls.filter((c) => c.chat === 1 && c.text === t('en', 'qualityMenu')).length
+    const bot = start({ DATA_DIR: data, E2E_MENU: '1' })
+    let jobs: string[] = []
+    try {
+      // the transcript: the subtitle's words, as text (no file, not cached)
+      const l = bot.link(1, 'menutr1')!
+      await bot.until(() => menus() === 1)
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l }, 'q:transcript:menutr1')
+      await bot.until(() => bot.reply(1).some((s) => s.includes('Hello world')))
+      await bot.until(() => bot.jobs().some((j) => j.includes(' q=transcript ')))
+      expect(bot.jobs().filter((j) => j.includes(' q=transcript ')).some((j) => j.startsWith('job ok '))).toBe(true)
+      // the same link, one language throttled (a 429 on fa): the en that
+      // came through still goes out, not an error ("throttle" in the id
+      // makes the stub write the en sub and 429 the rest)
+      const l2 = bot.link(1, 'menuthrottle2')!
+      await bot.until(() => menus() === 2)
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1, reply_to_message: l2 }, 'q:transcript:menuthrottle2')
+      await bot.until(() => bot.reply(1).filter((s) => s.includes('Hello world')).length === 2)
+      await bot.until(() => bot.jobs().filter((j) => j.includes(' q=transcript ')).length === 2)
+      expect(bot.jobs().filter((j) => j.includes(' q=transcript ')).every((j) => j.startsWith('job ok '))).toBe(true)
+      expect(bot.reply(1).some((s) => s.includes(t('en', 'failed')))).toBe(false)
+    } finally {
+      jobs = await bot.stop()
+      db.close()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
+  },
+  20_000,
+)
