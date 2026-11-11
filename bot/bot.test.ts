@@ -1651,6 +1651,35 @@ STYLE
   expect(vttText(vtt)).toBe('Hello world\nمرحبا')
 })
 
+test("vttText: a sentence repeated back to back (YouTube's auto captions) is said once, a real repeat kept", () => {
+  // the sentence its cue starts, the 10 ms bridging cue, the next cue's top
+  const vtt = `WEBVTT
+Kind: captions
+Language: en
+
+00:00:00.000 --> 00:00:02.000 align:start position:0%
+But you know many people will be saying
+
+00:00:02.000 --> 00:00:02.010 align:start position:0%
+But you know many people will be saying
+
+00:00:02.010 --> 00:00:04.000 align:start position:0%
+But you know many people will be saying
+okay look this Netanyahu government is
+`
+  expect(vttText(vtt)).toBe('But you know many people will be saying\nokay look this Netanyahu government is')
+  // a sentence the speaker repeats for real: other words between, kept
+  const repeat = `WEBVTT
+
+A
+A
+A
+B
+A
+`
+  expect(vttText(repeat)).toBe('A\nB\nA')
+})
+
 test('cacheKey: the quality is part of the key, so 720p is not the best', () => {
   const v = { extractor_key: 'Youtube', id: 'abc' }
   expect(cacheKey(v)).toBe('Youtube:abc')

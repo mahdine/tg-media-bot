@@ -121,12 +121,17 @@ export const youtubeVideo = (url: string) =>
   /^https?:\/\/(www\.)?(youtube\.com\/(watch\?v=|shorts\/\w+)|youtu\.be\/\w+)/.test(url)
 // A WebVTT transcript, as plain text: the header, cue indexes and timestamps,
 // the styling tags and the cue settings are dropped, what's left is the words
+// (one per line). YouTube's auto captions say each sentence in the cue it
+// starts, again in a 10 ms bridging cue, and again at the top of the next
+// one's: three times, back to back. A sentence the speaker repeats for real
+// comes seconds apart, in cues that carry other words between — so the
+// collapse is the consecutive duplicate alone.
 export const vttText = (vtt: string) => {
   const lines = vtt.split(/\r?\n/)
   // the file header (WEBVTT, Kind:, Language:) is the block before the first
   // blank line: drop it, then the cues follow
   let i = 0
-  while (i < lines.length && lines[i].trim() !== '') i++
+  while (i < lines.length && lines[i]!.trim() !== '') i++
   i++ // and the blank line that ends it
   const out: string[] = []
   for (const raw of lines.slice(i)) {
@@ -136,6 +141,7 @@ export const vttText = (vtt: string) => {
     if (line.includes('-->')) continue
     if (/^(Align|Line|Position|Size|Vertical|::)/.test(line)) continue
     if (/^[\d.,:\s-]+$/.test(line)) continue // a timestamp or a bare cue index
+    if (out[out.length - 1] === line) continue // the same sentence said again
     out.push(line)
   }
   return out.join('\n').trim()
