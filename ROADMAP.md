@@ -19,32 +19,30 @@ grounded in research noted at the end of each entry.
 - `file_id` is tied to a single bot, so a test bot can't reuse production
   file_ids.
 
-**Recommendation:**
-- **Groups (small step):** the bot already half-supports groups (it is
-  summoned there). To make group use first-class:
-  1. Document in the README: add the bot to the group, **make it an admin**
-     (otherwise privacy mode means it only hears mentions), or disable
-     privacy mode in BotFather.
-  2. Add a per-chat "summons required" setting: in groups where the bot is
-     *not* an admin, require the summon (`@danloadr_bot`) so it stays out of
-     the way; when it *is* an admin it can pick up bare links (detect via
-     the `my_chat_member` update, which is already subscribed).
-  3. Keep the quality menu **private-chat-only** (it is); in groups, default
-     to best quality and let a `/quality@bot` command or a menu (item 4)
-     override per chat.
-- **Channels (bigger step, do later):**
-  1. Accept a `channel_post` in channels where the bot is admin: if the post
-     is a link the bot handles, download and repost the result **to the same
-     channel** (the bot's `chat_id` in the channel post gives the target).
-  2. This turns the bot into an auto-media-pipeline for a channel the user
-     runs — the highest-value channel use for a personal bot.
-  3. Guard: only act on channels where the bot's status is `administrator`
-     (from `my_chat_member`), and cap how many such channels are active.
+**Groups (done):** the bot now detects its standing per group and applies the
+rule. `my_chat_member` (already subscribed) keeps an `admin` table (chat →
+0/1) in step: **an admin group picks up every video link posted there; a
+group the bot is only a member in answers links that mention it** (the
+privacy-mode behavior). `requested()` takes the group's admin flag, so a bare
+link is a request in an admin group as it is in a private chat, and a
+mention in any group. The quality menu stays private-chat-only (in a group a
+bare link downloads at best, or the user's `/menu` default for YouTube).
+Documented in the README ("Using it in a group"). See `adminOf`/`adminSet`
+in `bot.ts`, the `requested` admin parameter, and the e2e "a bare link in a
+group is a request only while the bot is an admin there".
 
-**Verdict:** groups are a near-term win (docs + admin detection + per-chat
-summon rule); channel auto-posting is a distinct feature to build after the
-menu system, reusing the same `handle()` path with a `channel_post`-sourced
-`Dest`.
+**Channels (bigger step, still open):**
+1. Accept a `channel_post` in channels where the bot is admin: if the post
+   is a link the bot handles, download and repost the result **to the same
+   channel** (the bot's `chat_id` in the channel post gives the target).
+2. This turns the bot into an auto-media-pipeline for a channel the user
+   runs — the highest-value channel use for a personal bot.
+3. Guard: only act on channels where the bot's status is `administrator`
+   (from `my_chat_member`), and cap how many such channels are active.
+
+**Verdict:** groups done (docs + admin detection + per-chat summon rule);
+channel auto-posting is a distinct feature, reusing the same `handle()` path
+with a `channel_post`-sourced `Dest`.
 
 ## 2. Welcome message (done)
 
@@ -69,20 +67,25 @@ quality menu, download statuses, the guest answer, the welcome. See
 `l:<code>` tap in `bot.ts`, and the e2e "board is tapped into a choice".
 A main-menu button for it is item 4.
 
-## 4. Main menu (inline)
+## 4. Main menu (inline) (done)
 
-- A persistent inline menu (the quality menu already shows the mechanism)
-  reachable from `/menu`:
-  - **Quality** (default for future downloads; YouTube today),
-  - **Language** (item 3 — changeable mid-conversation, not just at start),
+- A persistent inline menu reachable from `/menu`:
+  - **Quality** — the default for future YouTube links. A tap on Best / 720p
+    / Audio / Transcript stores it (per user, `quality` table) and a bare
+    YouTube link then downloads straight at it instead of offering its own
+    quality menu.
+  - **Language** (item 3) — re-opens the `/lang` board, changeable
+    mid-conversation.
   - **About / help** (item 2).
-- Implementation notes:
-  - Callback data stays short (`m:lang`, `m:quality`, …) and state lives in
-    the database keyed by chat, as the quality menu keeps its link in an
-    in-memory map.
-  - `answerCallbackQuery()` on every tap so the client stops spinning.
-  - The menu button is per-chat state, so group members can't change each
-    other's quality.
+- Implementation, as planned:
+  - Callback data is short (`mq:<quality>`, `m:lang`, `m:about`); state
+    lives in the database keyed by user, as the language does.
+  - `answerCallbackQuery()` on every tap so the client stops spinning; the
+    board's message is edited in place with the confirmation.
+  - Per-user state, so group members can't change each other's quality.
+- See `/menu` in `bot.ts` (`menuBoard`, the `mq:`/`m:` taps), the `quality`
+  table, `qualityName`, and the e2e "bot: /menu shows the board" and "bot: a
+  default set in /menu makes a bare YouTube link download at it".
 
 ## 5. Webhook (documented, not planned)
 
@@ -93,26 +96,32 @@ A main-menu button for it is item 4.
   front of the same container) + `setWebhook`. Nothing in the bot code
   should need to change; grammy handles both transports.
 
-## 6. Ideas from @uploadbot
+## 6. Ideas from @uploadbot (done)
 
 **Research:** @uploadbot is "a quick way to upload files to Telegram by
-url", 500 MB per file, 1 GB per day, `/upgrade` for more. It is the same
+url", 500 MB per file, 1 GB per day, `/upgrade` for more. It's the same
 category of bot as this one, with a freemium wall on volume.
 
-**What to take:**
-- **Daily/monthly usage stats:** the bot already tracks downloads in SQLite
-  (`census`/`promo`). A `/stats` command showing this user's downloads this
-  month is a cheap, useful addition.
-- **A soft limit + /stats transparency:** personal use needs no paywall,
-  but an explicit per-day cap (configurable, e.g. 10 GB) protects the
-  server if the bot ever runs in a group with strangers. Show the cap in
-  `/stats`.
+**What was taken:**
+- **Daily/monthly usage stats:** a `usage` table (day, user, MB, count),
+  credited with each completed job's sent MB (the file that went out: the
+  bot's floor, 1, for the stub's under-1 MB clip; 0 for a cached copy or a
+  transcript), keyed to the user's UTC day. `/stats` (private only) shows
+  today, this UTC month, all time, and the cap's line. See `statsOf`/
+  `formatSize`/`dayKey` in `bot.ts` and the e2e "/stats counts a finished
+  download".
+- **A soft limit + /stats transparency:** `DAILY_MB` (MB per user per UTC
+  day, 10 GB default, `0` for none). A download starts only while the
+  user's MB today are under the cap (the new file's size isn't predicted);
+  the refusal goes out in the user's language, and groups/channels aren't
+  capped. See `parseDailyMb`/`capDecision` and the e2e "the day fills to
+  the cap download by download".
 - **`/upgrade` is not wanted** (personal bot, no monetization) — noted only
   to close the loop on the research.
 - **Single-link UX:** @uploadbot's whole pitch is "paste a URL, get the
-  file". Keep this bot's UX at least as frictionless; the quality menu
-  (item 1 in the current build) must stay one tap from the link, not a
-  menu maze.
+  file". This bot's UX stays at least as frictionless: the quality menu
+  (item 7) is one tap from the link, and `/menu`'s default quality skips it
+  entirely when you always want the same thing.
 
 ## 7. Quality menu (done) and progress (done)
 

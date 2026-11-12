@@ -436,19 +436,23 @@ export async function videos(urls: string[]) {
   return urls.filter((u) => by.has(u))
 }
 
-// What a message asks to download. In groups a link mentioned in passing
-// (a bare domain, an article) isn't a request: unless the bot is summoned,
-// only links to a site yt-dlp knows count. The same goes for a guest message
-// (chat 'guest') in any chat, a private one too: Telegram calls the bot on a
-// plain reply to one of its messages as well, mention or not.
+// What a message asks to download. In a group that isn't the bot's own to
+// answer (not summoned, not an admin group), a link mentioned in passing (a
+// bare domain, an article) isn't a request: only links to a site yt-dlp
+// knows count. In a group the bot is an admin in, a bare link is a request
+// as in a private chat (it hears every message there). The same goes for a
+// guest message (chat 'guest') in any chat, a private one too: Telegram
+// calls the bot on a plain reply to one of its messages as well, mention or
+// not.
 export async function requested(
   msg: Message,
   me: Me,
   chat: string,
   video = videos,
+  admin = false,
 ) {
   const found = links(msg, me)
-  return chat === 'private' || summoned(msg, me.username) || !found.length
+  return chat === 'private' || admin || summoned(msg, me.username) || !found.length
     ? found
     : video(found)
 }
@@ -1316,6 +1320,23 @@ function main() {
     }
   }
   const people = census(db)
+  // The groups the bot is an admin in, by chat id. An admin bot hears every
+  // message (privacy mode is off for admins), so there it picks up bare links
+  // too; in a group it is not an admin, a bare link isn't a request (the user
+  // must summon it) — except a YouTube one, which yt-dlp would claim anyway.
+  // my_chat_member (already subscribed) keeps the table in step
+  db.run('CREATE TABLE IF NOT EXISTS admin (chat INTEGER PRIMARY KEY, admin INTEGER NOT NULL)')
+  const adminRow = db.query<{ admin: number }, [number]>('SELECT admin FROM admin WHERE chat = ?')
+  const adminSet = db.query('INSERT INTO admin VALUES (?, ?) ON CONFLICT (chat) DO UPDATE SET admin = excluded.admin')
+  const adminOf = (chatId?: number | null) => {
+    if (!chatId) return false
+    try {
+      return !!(adminRow.get(chatId)?.admin)
+    } catch (e) {
+      console.error(e) // a lock costs the link its admin answer, not the bot
+      return false
+    }
+  }
   // The language each user picked (/lang), by user id. An explicit choice
   // wins over Telegram's detection (resolve). A write or read that meets
   // another process's lock (a deploy's handover) fails at once, as the
@@ -1334,6 +1355,37 @@ function main() {
   // The language a reply in ctx goes out in: the user's stored choice, else
   // what Telegram detected, else English
   const langOfCtx = (ctx: Context) => resolve(ctx.from?.language_code, langOf(ctx.from?.id))
+  // The quality a user's YouTube links download at by default (/menu's board),
+  // by user id, mirroring the language table. Absent (no row) is the menu: a
+  // bare YouTube link offers best / 720 / audio / transcript. A stored one
+  // skips the menu and downloads straight at it. A write or read that meets
+  // another process's lock fails at once, as the cache's do: it costs a reply
+  // its default, nothing more (a failed read falls back to the menu)
+  db.run('CREATE TABLE IF NOT EXISTS quality (user INTEGER PRIMARY KEY, code TEXT NOT NULL)')
+  const qualityRow = db.query<{ code: Quality | null }, [number]>('SELECT code FROM quality WHERE user = ?')
+  const defaultQualityOf = (user?: number | null): Quality | null => {
+    if (!user) return null
+    try {
+      return qualityRow.get(user)?.code ?? null
+    } catch (e) {
+      console.error('quality', (e as Error).message)
+      return null
+    }
+  }
+  const setDefaultQuality = (user: number, code: Quality) => {
+    try {
+      db.query('INSERT OR REPLACE INTO quality VALUES (?, ?)').run(user, code)
+    } catch (e) {
+      console.error('quality', (e as Error).message)
+    }
+  }
+  const clearDefaultQuality = (user: number) => {
+    try {
+      db.query('DELETE FROM quality WHERE user = ?').run(user)
+    } catch (e) {
+      console.error('quality', (e as Error).message)
+    }
+  }
   // Each user's downloads per UTC day: the count, and the MB of the files
   // that went out (a cached copy or a transcript has none). A write or read
   // that meets another process's lock (a deploy's handover) fails at once,
@@ -1872,15 +1924,42 @@ function main() {
   // The quality a YouTube link is offered. The bot answers a bare YouTube
   // video link with a menu (best / 720p / audio / transcript) instead of
   // downloading at once, unless it was summoned (the user named it, so the
-  // link is what they want) or another link in the same message made it not
-  // the sole thing asked. Off in a bot run with E2E_PARENT_PID (tests, where
-  // a bare link must download at once), unless E2E_MENU turns it back on for
-  // a menu test.
+  // link is what they want), the user set a default for such links in /menu
+  // (it downloads straight at that, no menu), or another link in the same
+  // message made it not the sole thing asked. Off in a bot run with
+  // E2E_PARENT_PID (tests, where a bare link must download at once), unless
+  // E2E_MENU turns it back on for a menu test.
+  // The quality a tap on /menu's board names, as the reply "I download your
+  // links at {q} by default" reads it: the quality's own button text
+  const qualityName = (lang: Code, q: Quality) =>
+    t(lang, q === 'best' ? 'qBest' : q === '720' ? 'q720' : q === 'audio' ? 'qAudio' : 'qTranscript')
+  // The main menu's board (/menu): a default quality for the user's links
+  // (best / 720 / audio / transcript — the quality a bare YouTube link skips
+  // its own menu for), the language (the /lang board, re-shown), and about
+  // (the help). The board is per-user state in the database, as the language
+  // is: members of one group can't change each other's. Callback data stays
+  // short (m:<what>), and every tap answers the query so the client stops
+  // spinning
+  const menuBoard = (lang: Code) => ({
+    inline_keyboard: [
+      [
+        { text: t(lang, 'mBest'), callback_data: 'mq:best' },
+        { text: t(lang, 'm720'), callback_data: 'mq:720' },
+        { text: t(lang, 'mAudio'), callback_data: 'mq:audio' },
+      ],
+      [{ text: t(lang, 'mTranscript'), callback_data: 'mq:transcript' }],
+      [
+        { text: t(lang, 'mLang'), callback_data: 'm:lang' },
+        { text: t(lang, 'mAbout'), callback_data: 'm:about' },
+      ],
+    ],
+  })
   const offerMenu = (ctx: Context, url: string, wanted: string[]) =>
     (!env.E2E_PARENT_PID || env.E2E_MENU) &&
     ctx.chat!.type === 'private' &&
     wanted.length === 1 &&
     youtubeVideo(url) &&
+    !defaultQualityOf(ctx.from?.id) &&
     !summoned(ctx.msg!, ctx.me.username)
   // A menu up now, by chat + message: the link it offers, and the video's id
   // in the button's data too (a tap's message may not keep its reply, as a
@@ -2328,6 +2407,13 @@ function main() {
     }
     void track(ctx.reply(t(lang, 'langOffer'), { reply_markup: board }).catch(console.error))
   })
+  // /menu: the board a user sets their own from — the quality their links
+  // download at by default (a bare YouTube link then skips its own menu and
+  // downloads straight at it), the language (the /lang board, re-shown), and
+  // the help. Per-user, in the database, as the language
+  bot.command('menu', (ctx) => {
+    void track(ctx.reply(t(langOfCtx(ctx), 'menu'), { reply_markup: menuBoard(langOfCtx(ctx)) }).catch(console.error))
+  })
   bot.on('message', (ctx) => {
     const me = { ...ctx.me, mine }
     // its own videos forwarded or copied to it get no answer, not even the help
@@ -2337,15 +2423,21 @@ function main() {
     // a throw that gets past handle()'s own catch is logged, as unhandled it
     // would end the bot
     void track(
-      requested(ctx.msg, me, ctx.chat.type).then((wanted) => {
+      requested(ctx.msg, me, ctx.chat.type, undefined, adminOf(ctx.chat.id)).then((wanted) => {
         // a bare YouTube video link (private, not summoned) offers the quality
         // menu instead of downloading at once: the user taps best / 720p /
-        // audio / transcript
+        // audio / transcript — unless the user set a default for such links
+        // in /menu, which downloads straight at it (no menu). The default
+        // applies to a YouTube link alone: the other qualities (720, audio,
+        // transcript) are YouTube's, and one off-YouTube would change that
+        // link's format (or cache key) for no reason
+        const def = defaultQualityOf(ctx.from?.id)
+        const qFor = (url: string) => (youtubeVideo(url) ? def ?? undefined : undefined)
         if (wanted.length === 1 && offerMenu(ctx, wanted[0], wanted)) {
           answerMenu(ctx, wanted[0])
           return
         }
-        wanted.forEach((url) => void track(handle(ctx, url).catch(console.error)))
+        wanted.forEach((url) => void track(handle(ctx, url, qFor(url)).catch(console.error)))
       }),
     )
     if (!found.length && ctx.chat.type === 'private') help(ctx)
@@ -2371,6 +2463,59 @@ function main() {
           .answerCallbackQuery()
           .then(async () => {
             const message = ctx.callbackQuery.message
+            if (message) await ctx.api.editMessageText(ctx.chat!.id, message.message_id, say)
+            else if (ctx.chat) await ctx.reply(say)
+          })
+          .catch(console.error),
+      )
+      return
+    }
+    // a tap on /menu's board: the quality it names (mq:<q>), or the
+    // language's board (m:lang, re-shown) or the help (m:about). The reply
+    // edits the board's message
+    const mq = data ? /^mq:(best|720|audio|transcript)$/.exec(data) : undefined
+    if (mq && ctx.from) {
+      const q = mq[1] as Quality
+      setDefaultQuality(ctx.from.id, q)
+      const say = t(langOfCtx(ctx), 'qSet').replaceAll('{q}', qualityName(langOfCtx(ctx), q))
+      void track(
+        ctx
+          .answerCallbackQuery()
+          .then(async () => {
+            const message = ctx.callbackQuery.message
+            if (message) await ctx.api.editMessageText(ctx.chat!.id, message.message_id, say)
+            else if (ctx.chat) await ctx.reply(say)
+          })
+          .catch(console.error),
+      )
+      return
+    }
+    if (data === 'm:lang') {
+      void track(
+        ctx
+          .answerCallbackQuery()
+          .then(async () => {
+            const message = ctx.callbackQuery.message
+            const lang = langOfCtx(ctx)
+            const board = {
+              inline_keyboard: [LANGS.slice(0, 5), LANGS.slice(5)].map((row) =>
+                row.map(([c, name]) => ({ text: name, callback_data: `l:${c}` })),
+              ),
+            }
+            if (message) await ctx.api.editMessageText(ctx.chat!.id, message.message_id, t(lang, 'langOffer'), { reply_markup: board })
+            else if (ctx.chat) await ctx.reply(t(lang, 'langOffer'), { reply_markup: board })
+          })
+          .catch(console.error),
+      )
+      return
+    }
+    if (data === 'm:about') {
+      void track(
+        ctx
+          .answerCallbackQuery()
+          .then(async () => {
+            const message = ctx.callbackQuery.message
+            const say = t(langOfCtx(ctx), 'help')
             if (message) await ctx.api.editMessageText(ctx.chat!.id, message.message_id, say)
             else if (ctx.chat) await ctx.reply(say)
           })
@@ -2407,6 +2552,13 @@ function main() {
     const was = ctx.myChatMember.old_chat_member.status
     const now = ctx.myChatMember.new_chat_member.status
     if (ctx.chat.type === 'private' && now === 'kicked') promo.blocked(ctx.from.id)
+    // the group's rule turns on the bot's standing there: as an admin it
+    // hears every message (a bare link is a request), below that, mentions
+    try {
+      if (ctx.chat.type !== 'private') adminSet.run(ctx.chat.id, now === 'administrator' ? 1 : 0)
+    } catch (e) {
+      console.error(e) // a lock costs the change, the next update re-tells it
+    }
     if (
       ctx.chat.type !== 'private' &&
       (was === 'left' || was === 'kicked') &&

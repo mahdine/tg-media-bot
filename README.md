@@ -48,9 +48,38 @@ tg-media-bot/
 - Download queue, Telegram flood-control handling, works in groups and private
 - yt-dlp auto-update (disable with `YTDLP_UPDATE=off`)
 - Multilingual replies (`i18n.ts` — 9 languages), `/lang` to pick a language
+- **Main menu** (`/menu`): set your default quality for links, change your
+  language, or read the help — all inline, remembered per user
+- **Groups**: make the bot a **group admin** and it picks up every video link
+  posted there; as an ordinary member it only answers links that mention it
 - `/stats` and a per-user **daily limit** (`DAILY_MB`, MB per UTC day, 10 GB
   default, `0` for none)
 - Future work: see [ROADMAP.md](ROADMAP.md)
+
+### Using it in a group
+
+Add the bot to a group. Telegram's **privacy mode** means a bot that isn't an
+admin only hears commands, mentions, and replies to its messages — so as an
+ordinary member it downloads links only when they **mention it**
+(`@yourbot_name`). **Make the bot an admin** (group → Administrators → add)
+and it sees every message, so it picks up bare video links too. It learns each
+group's standing from the membership updates, so the rule follows you if you
+promote or demote it later. (A personal bot with no strangers: admin is the
+convenient default; privacy mode in BotFather is the alternative.)
+
+### The main menu (`/menu`)
+
+`/menu` shows an inline board:
+
+- **Best / 720p / Audio / Transcript** — sets your *default quality* for bare
+  YouTube links. Once set, such a link downloads straight at that quality
+  instead of offering the one-tap quality menu.
+- **Language** — re-opens the `/lang` board, so you can switch language any
+  time, not only at start.
+- **About** — the help.
+
+Choices are stored per user, so group members can't change each other's.
+
 
 ## Prerequisites
 

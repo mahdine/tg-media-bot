@@ -295,6 +295,36 @@ function start(
         },
       } as { update_id: number })
     },
+    // the bot's own standing in group chat changes (as my_chat_member tells it):
+    // from old status to new (a user makes it an admin, or takes it back)
+    member(chat: number, old: string, now: string) {
+      updates.push({
+        update_id: updates.length + 1,
+        my_chat_member: {
+          chat: { id: chat, type: 'supergroup', title: 'g' },
+          from: { id: 9, is_bot: false, first_name: 'u', language_code: 'en' },
+          old_chat_member: { user: me, status: old },
+          new_chat_member: { user: me, status: now },
+          date: Math.floor(Date.now() / 1000),
+        },
+      } as { update_id: number })
+    },
+    // a plain link posted to the group — no mention, no reply (the bare case:
+    // whether it counts as a request is the bot's own rule to decide)
+    groupLink(chat: number, url: string) {
+      const text = `see ${url}`
+      updates.push({
+        update_id: updates.length + 1,
+        message: {
+          message_id: ++id,
+          date: 0,
+          chat: { id: chat, type: 'supergroup', title: 'g' },
+          from: { id: 9, is_bot: false, first_name: 'u', language_code: 'en' },
+          text,
+          entities: [{ type: 'url', offset: text.length - url.length, length: url.length }],
+        },
+      } as { update_id: number })
+    },
     // as a guest message (query q<user>) in user's private chat with someone
     // else: the bot mentioned with the link to v (Telegram doesn't call it on
     // a link alone), or about its own video of v: 'forward' is that video
@@ -3568,6 +3598,110 @@ e2e(
       rmSync(data, { recursive: true, force: true })
     }
     expect(jobs.filter((l) => l.startsWith('job ok '))).toHaveLength(2)
+  },
+  30_000,
+)
+
+e2e(
+  'bot: /menu shows the board; a quality tap sets the user default, m:lang re-shows the language board, m:about the help',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // the board: its text, and the buttons
+      bot.command(1, '/menu')
+      await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.method === 'sendMessage' && c.text === t('en', 'menu')))
+      const board = (): [string, string][] => {
+        const c = bot.calls.find((c) => c.chat === 1 && c.method === 'sendMessage' && c.text === t('en', 'menu'))!
+        const kb = JSON.parse(c.markup!).inline_keyboard as { text: string; callback_data: string }[][]
+        return kb.flat().map((b) => [b.text, b.callback_data] as [string, string])
+      }
+      const texts: string[] = board().map(([text]) => text)
+      for (const key of ['mBest', 'm720', 'mAudio', 'mTranscript', 'mLang', 'mAbout'] as const) expect(texts).toContain(t('en', key))
+      const has = (text: string, cb: string) => board().some(([b, d]) => b === text && d === cb)
+      expect(has(t('en', 'm720'), 'mq:720')).toBe(true)
+      expect(has(t('en', 'mBest'), 'mq:best')).toBe(true)
+      expect(has(t('en', 'mLang'), 'm:lang')).toBe(true)
+      expect(has(t('en', 'mAbout'), 'm:about')).toBe(true)
+      // a quality tap stores the default and the board's message says so
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 5 }, 'mq:720')
+      await bot.until(() => bot.statuses(1).includes(t('en', 'qSet').replaceAll('{q}', t('en', 'q720'))))
+      // the language's board comes back in its place
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 5 }, 'm:lang')
+      await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.method === 'editMessageText' && c.text === t('en', 'langOffer')))
+      // about: the help
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 5 }, 'm:about')
+      await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.method === 'editMessageText' && c.text === t('en', 'help')))
+    } finally {
+      jobs = await bot.stop()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs).toHaveLength(0)
+  },
+  20_000,
+)
+
+e2e(
+  'bot: a default set in /menu makes a bare YouTube link download at it, without its own menu',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // no default: a bare link downloads at once (tests run without the menu)
+      bot.link(1, 'menudef1')
+      await bot.until(() => bot.videos().length === 1 && bot.jobs().length === 1)
+      expect(bot.jobs().some((j) => / q=\w+ /.test(j))).toBe(false)
+      // set the default to 720p
+      bot.command(1, '/menu')
+      await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.text === t('en', 'menu')))
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 5 }, 'mq:720')
+      await bot.until(() => bot.statuses(1).includes(t('en', 'qSet').replaceAll('{q}', t('en', 'q720'))))
+      // the next bare link goes straight to 720p (a quality in its job line)
+      bot.link(1, 'menudef2')
+      await bot.until(() => bot.videos().length === 2 && bot.jobs().some((j) => j.includes(' q=720 ')))
+    } finally {
+      jobs = await bot.stop()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.some((j) => j.includes(' q=720 ') && j.startsWith('job '))).toBe(true)
+  },
+  20_000,
+)
+
+e2e(
+  "bot: a bare link in a group is a request only while the bot is an admin there (my_chat_member turns the rule on and off)",
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const plain = 'https://tugport.com/' // a page no site's extractor claims
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // the bot is an ordinary member of the group: a bare plain-site link in
+      // it is not a request (only a link to a site yt-dlp knows would be)
+      bot.member(-100, 'member', 'member')
+      bot.groupLink(-100, plain)
+      await Bun.sleep(1500)
+      expect(bot.jobs()).toHaveLength(0)
+      // made an admin: the bot hears every message there, so the same bare
+      // link is a request — the plain page's check runs and lands in the log
+      bot.member(-100, 'member', 'administrator')
+      await Bun.sleep(300)
+      bot.groupLink(-100, plain)
+      await bot.until(() => bot.jobs().some((j) => j.includes('host=tugport.com')))
+      expect(bot.jobs().every((j) => j.startsWith('job fail:'))).toBe(true)
+      // demoted back to a member: a bare link is quiet again
+      bot.member(-100, 'administrator', 'member')
+      await Bun.sleep(300)
+      bot.groupLink(-100, plain)
+      await Bun.sleep(1500)
+      expect(bot.jobs().filter((j) => j.includes('host=tugport.com'))).toHaveLength(1)
+    } finally {
+      jobs = await bot.stop()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.filter((l) => l.includes('host=tugport.com')).every((l) => l.startsWith('job fail:'))).toBe(true)
   },
   30_000,
 )

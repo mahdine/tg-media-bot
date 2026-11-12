@@ -173,6 +173,23 @@ test('requested: unless summoned, groups only check links with yt-dlp', async ()
   expect(checked.length).toBe(1)
 })
 
+test('requested: a group the bot is an admin in treats a bare link as a request, as a private chat', async () => {
+  const checked: string[][] = []
+  const video = async (u: string[]) => (checked.push(u), u.slice(1))
+  const msg = said('tugport.com and youtu.be/x')
+  // not an admin: the plain site is checked, the article stays quiet
+  expect(await requested(msg, me, 'group', video)).toEqual(['https://youtu.be/x'])
+  expect(checked).toEqual([['https://tugport.com/', 'https://youtu.be/x']])
+  // an admin: both links are taken, the plain site's check skipped
+  checked.length = 0
+  expect(await requested(msg, me, 'group', video, true)).toEqual(['https://tugport.com/', 'https://youtu.be/x'])
+  expect(checked).toEqual([])
+  // admin only changes a group: a private chat is a request either way
+  checked.length = 0
+  expect(await requested(msg, me, 'private', video, true)).toEqual(links(msg, me))
+  expect(checked).toEqual([])
+})
+
 test('requested: a guest message is checked as in a group, unless it mentions the bot', async () => {
   const checked: string[][] = []
   const video = async (u: string[]) => (checked.push(u), u.slice(1))
