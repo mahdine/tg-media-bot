@@ -6,7 +6,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readdir, rename, rm, stat } from 'node
 import { join } from 'node:path'
 import { egressProxy, proxyFreeEnv } from './egress'
 import { DRAIN, pollWithHandover } from './handover'
-import { type Key, t } from './i18n'
+import { type Code, type Key, LANGS, normalize, resolve, t } from './i18n'
 import { type Promo, promos } from './promo'
 import { scratch } from './scratch'
 
@@ -1264,6 +1264,25 @@ function main() {
     }
   }
   const people = census(db)
+  // The language each user picked (/lang), by user id. An explicit choice
+  // wins over Telegram's detection (resolve). A write or read that meets
+  // another process's lock (a deploy's handover) fails at once, as the
+  // cache's do: it costs a reply its detection, nothing more
+  db.run('CREATE TABLE IF NOT EXISTS lang (user INTEGER PRIMARY KEY, code TEXT NOT NULL)')
+  const langRow = db.query<{ code: string | null }, [number]>('SELECT code FROM lang WHERE user = ?')
+  const langOf = (user?: number | null) =>
+    user ? (cache('lang', () => langRow.get(user)?.code ?? null) ?? null) : null
+  const pickLang = (user: number, code: Code) => {
+    try {
+      db.query('INSERT OR REPLACE INTO lang VALUES (?, ?)').run(user, code)
+    } catch (e) {
+      console.error('lang', (e as Error).message)
+    }
+  }
+  // The language a reply in ctx goes out in: the user's stored choice, else
+  // what Telegram detected, else English
+  const langOfCtx = (ctx: Context) => resolve(ctx.from?.language_code, langOf(ctx.from?.id))
+
   Bun.serve({
     port: Number(env.STATS_PORT || 8080),
     fetch: (req) =>
@@ -1301,7 +1320,7 @@ function main() {
   // The help text goes out detached too: in a flood wait a reply can take
   // minutes, and updates are handled one at a time
   const help = (ctx: Context) =>
-    void track(ctx.reply(t(ctx.from?.language_code, 'help')).catch(console.error))
+    void track(ctx.reply(t(langOfCtx(ctx), 'help')).catch(console.error))
 
   const send = sender(bot.api, keep)
 
@@ -1778,7 +1797,7 @@ function main() {
   const menuKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.msg!.message_id}`
   const answerMenu = (ctx: Context, url: string) => {
     const key = menuKey(ctx)
-    const lang = ctx.from?.language_code ?? 'en'
+    const lang = langOfCtx(ctx)
     menuLinks.set(key, url)
     // a menu that no one taps drops off by itself (30 min); unref'd so it
     // never holds an exiting bot's event loop
@@ -1821,7 +1840,7 @@ function main() {
   }
 
   async function handle(ctx: Context, url: string, quality?: Quality) {
-    const lang = ctx.from?.language_code
+    const lang = langOfCtx(ctx)
     let statusId: number | undefined
     // text overrides the key's line (the upload's size)
     const show = async (key: Key, follow = false, signal?: Signal, text?: string) => {
@@ -2008,7 +2027,7 @@ function main() {
   // job goes on and into the video when it's ready.
   async function guest(ctx: Context) {
     const msg = ctx.guestMessage!
-    const lang = ctx.from?.language_code
+    const lang = langOfCtx(ctx)
     const me = { ...ctx.me, mine }
     const called = summoned(msg, me.username)
     // Telegram calls it on a plain reply to one of its messages too, so as
@@ -2156,12 +2175,45 @@ function main() {
     return next()
   })
   const created = db.query<{ created: number }, [number]>('SELECT created FROM chats WHERE id = ?')
+  // The welcome a fresh private chat hears on /start: what the bot does and
+  // how, in the user's own language (their stored choice, else detection)
+  const welcome = (ctx: Context) => {
+    const createdAt = ctx.chat?.type === 'private' ? created.get(ctx.chat.id)?.created : undefined
+    // only a fresh private chat (the census above has just created it)
+    if (createdAt === undefined || Date.now() / 1000 - createdAt >= 600) return
+    void track(
+      ctx
+        .reply(t(langOfCtx(ctx), 'welcome').replaceAll('{mb}', String(LIMIT >> 20)))
+        .catch(console.error),
+    )
+  }
   bot.command(['start', 'help'], (ctx) => {
     // first: nothing the stats below run into can cost the help
     help(ctx)
     // a /start from another bot's campaign link (promo.ts); the census above has just added a new chat
     if (ctx.chat.type === 'private' && ctx.from && ctx.match)
       promo.arrived(ctx.from.id, ctx.match, () => Date.now() / 1000 - (created.get(ctx.chat.id)?.created ?? 0) < 600)
+    // the welcome: a /start (not a /help, whose payload is a command; nor a
+    // campaign's, whose payload is the campaign code and whose own text goes
+    // out) in a fresh private chat
+    else if (!/^\/help(@\w+)?\b/i.test(ctx.msg?.text ?? '')) welcome(ctx)
+  })
+  // /lang: the board of the bot's languages; /lang <code> takes it at once
+  bot.command('lang', (ctx) => {
+    const code = normalize(ctx.match?.trim() ?? '')
+    if (code) {
+      if (ctx.from) pickLang(ctx.from.id, code)
+      return void track(ctx.reply(t(code, 'langSet')).catch(console.error))
+    }
+    const lang = langOfCtx(ctx)
+    // Telegram allows 8 buttons in a row: two rows of 5 and 4
+    const board = {
+      inline_keyboard: [
+        LANGS.slice(0, 5),
+        LANGS.slice(5),
+      ].map((row) => row.map(([c, name]) => ({ text: name, callback_data: `l:${c}` }))),
+    }
+    void track(ctx.reply(t(lang, 'langOffer'), { reply_markup: board }).catch(console.error))
   })
   bot.on('message', (ctx) => {
     const me = { ...ctx.me, mine }
@@ -2195,6 +2247,24 @@ function main() {
     const data = ctx.callbackQuery.data
     const tap = data ? qualityTap(data) : undefined
     const menu = ctx.callbackQuery.message
+    // a tap on /lang's board: the language it names, or undefined when the
+    // callback is not one of those (the quality menu's are the q: ones)
+    const named = data ? LANGS.find(([c]) => data === `l:${c}`)?.[0] : undefined
+    if (named) {
+      if (ctx.from) pickLang(ctx.from.id, named)
+      const say = t(named, 'langSet')
+      void track(
+        ctx
+          .answerCallbackQuery()
+          .then(async () => {
+            const message = ctx.callbackQuery.message
+            if (message) await ctx.api.editMessageText(ctx.chat!.id, message.message_id, say)
+            else if (ctx.chat) await ctx.reply(say)
+          })
+          .catch(console.error),
+      )
+      return
+    }
     if (!tap || !menu) return
     const src = menu.reply_to_message
     let url = src ? menuLinks.get(`${ctx.chat!.id}:${src.message_id}`) : undefined

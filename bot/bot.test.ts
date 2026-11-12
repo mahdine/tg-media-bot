@@ -51,7 +51,7 @@ import {
   youtubeVideo,
   pickSub,
 } from './bot'
-import { lang, t } from './i18n'
+import { lang, normalize, resolve, t } from './i18n'
 
 test('urls: entities, text links, bare domains, dedupe, non-http dropped', () => {
   const text = 'look youtu.be/x and https://x.com/a/status/1 youtu.be/x ftp://a.b'
@@ -109,6 +109,23 @@ test('lang: telegram codes map to the right locale', () => {
   expect(lang('fa')).toBe('fa')
   expect(lang('de')).toBe('en')
   expect(lang(undefined)).toBe('en')
+})
+
+test('normalize: a code the bot speaks maps to its locale, an unknown one to nothing', () => {
+  expect(normalize('pt-br')).toBe('pt-br')
+  expect(normalize('ZH-HANS')).toBe('zh')
+  expect(normalize(' fa ')).toBe('fa')
+  expect(normalize('de')).toBeUndefined()
+  expect(normalize('')).toBeUndefined()
+})
+
+test('resolve: a stored choice wins over detection, detection over nothing', () => {
+  expect(resolve('ru', 'fa')).toBe('fa')
+  expect(resolve('ru', undefined)).toBe('ru')
+  expect(resolve(undefined, 'ja')).toBe('ja')
+  expect(resolve('de', 'pt')).toBe('pt')
+  expect(resolve(undefined, undefined)).toBe('en')
+  expect(resolve('en', 'zz')).toBe('en') // a stored code the bot doesn't speak can't happen (normalize), and falls back anyway
 })
 
 // the bot, as getMe has it, with no file of its own yet

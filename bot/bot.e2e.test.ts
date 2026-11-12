@@ -5,7 +5,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSyn
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { proxyFreeEnv } from './egress'
-import { t } from './i18n'
+import { LANGS, t } from './i18n'
 import { arm, type Campaign } from './promo'
 
 // The real bot, polling a fake Bot API, with test/yt-dlp standing in for
@@ -33,6 +33,8 @@ type Call = {
   unique?: string
   // when the fake Bot API got it (Date.now())
   at: number
+  // an inline board sent with the message, as its reply_markup
+  markup?: string
 }
 // The video every fake download copies (FAKE_MP4), made once: an ffmpeg run
 // per test, in spawnSync, would hold up all the concurrent ones (0.4 s each).
@@ -117,6 +119,7 @@ function start(
         title: body.title,
         performer: body.performer,
         duration: body.duration === undefined ? undefined : Number(body.duration),
+        markup: body.reply_markup === undefined ? undefined : JSON.stringify(body.reply_markup),
         at: Date.now(),
       }
       calls.push(call)
@@ -3380,6 +3383,104 @@ e2e(
     }
     // a transcript's job is 'cached' (it sends no file); the rest 'ok'
     expect(jobs.every((l) => ['ok', 'cached'].includes(l.split(' ', 2)[1]))).toBe(true)
+  },
+  20_000,
+)
+
+e2e(
+  "bot: /lang's board is tapped into a choice, the choice wins over detection, and /lang <code> takes it at once",
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // the board, in the user's detected language (en)
+      bot.command(1, '/lang')
+      await bot.until(() => bot.statuses(1).includes(t('en', 'langOffer')))
+      // its buttons: the bot's languages, in order (two rows, 5 and 4)
+      const board = bot.calls.find(
+        (c) => c.chat === 1 && c.text === t('en', 'langOffer') && c.markup,
+      )!.markup!
+      const boardData = JSON.parse(board).inline_keyboard
+        .flat()
+        .map((b: { text: string; callback_data: string }) => [b.text, b.callback_data] as const)
+      expect(boardData).toEqual(LANGS.map(([c, name]) => [name, `l:${c}`] as const))
+      // a tap on فارسی: the confirmation goes out in fa, the choice is stored
+      bot.tap(1, { chat: { id: 1, type: 'private' }, message_id: 1 }, 'l:fa')
+      await bot.until(() => bot.statuses(1).includes(t('fa', 'langSet')))
+      // /lang <code> takes the choice at once, in the chosen language
+      bot.command(2, '/lang fa')
+      await bot.until(() => bot.statuses(2).includes(t('fa', 'langSet')))
+      // user 2, whose Telegram says en, is answered in fa from then on
+      // (the id must not contain "long", which test/yt-dlp reads as a 50-minute video)
+      bot.link(2, 'langone1')
+      await bot.until(() => bot.statuses(2).includes(t('fa', 'downloading')))
+      await bot.until(() => bot.videos().length === 1)
+    } finally {
+      jobs = await bot.stop()
+    }
+    // the choices, by user, in the database
+    const db = new Database(join(data, 'bot.sqlite'), { readonly: true })
+    try {
+      expect(db.query('SELECT user, code FROM lang ORDER BY user').all()).toEqual([
+        { user: 1, code: 'fa' },
+        { user: 2, code: 'fa' },
+      ])
+    } finally {
+      db.close()
+      rmSync(data, { recursive: true, force: true })
+    }
+    // every tap and choice got its answer (en offer, fa confirmations)
+    expect(bot.statuses(1).filter((s) => s.startsWith('🌐') || s.startsWith('✅'))).toEqual([
+      t('en', 'langOffer'),
+      t('fa', 'langSet'),
+    ])
+    expect(bot.statuses(2).filter((s) => s.startsWith('✅'))).toEqual([t('fa', 'langSet')])
+    expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
+  },
+  25_000,
+)
+
+e2e(
+  'bot: a fresh private chat hears the welcome on /start, an old one only the help',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    // user 2's chat is a day old: the welcome is a fresh chat's only. Create
+    // the table as the bot's census will (two columns), so its ALTERs add the
+    // rest; the row's created date survives the upsert (it only sets seen)
+    const db = new Database(join(data, 'bot.sqlite'), { create: true })
+    db.run('CREATE TABLE IF NOT EXISTS chats (id INTEGER PRIMARY KEY, created INTEGER NOT NULL)')
+    db.run('INSERT INTO chats (id, created) VALUES (2, unixepoch() - 86400)')
+    db.close()
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // user 1's /start: the help, then the welcome (the bot's local API
+      // server, so the limit is 2000 MB); the two replies are sent in
+      // parallel, so the pair is compared as a set
+      bot.command(1, '/start')
+      await bot.until(() =>
+        bot.statuses(1).includes(t('en', 'help')) &&
+        bot.statuses(1).includes(t('en', 'welcome').replaceAll('{mb}', '2000')),
+      )
+      expect([...bot.statuses(1)].sort()).toEqual(
+        [t('en', 'help'), t('en', 'welcome').replaceAll('{mb}', '2000')].sort(),
+      )
+      // user 2's day-old chat: the help, no welcome
+      bot.command(2, '/start')
+      await bot.until(() => bot.statuses(2).includes(t('en', 'help')))
+      expect(bot.statuses(2)).toEqual([t('en', 'help')])
+      // a /help in the fresh chat: the help alone
+      bot.command(1, '/help')
+      await bot.until(() => bot.statuses(1).filter((s) => s === t('en', 'help')).length === 2)
+      expect([...bot.statuses(1)].sort()).toEqual(
+        [t('en', 'help'), t('en', 'welcome').replaceAll('{mb}', '2000'), t('en', 'help')].sort(),
+      )
+    } finally {
+      jobs = await bot.stop()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs).toHaveLength(0)
   },
   20_000,
 )
