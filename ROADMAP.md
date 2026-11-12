@@ -46,29 +46,28 @@ summon rule); channel auto-posting is a distinct feature to build after the
 menu system, reusing the same `handle()` path with a `channel_post`-sourced
 `Dest`.
 
-## 2. Welcome message
+## 2. Welcome message (done)
 
-- On `/start` (and on the first link in a fresh private chat), send a short
-  feature list in the user's language:
-  - links it handles (YouTube, Instagram, X/Twitter, TikTok, …),
-  - the quality menu (best / 720p / audio / transcript for YouTube),
-  - how to summon it in groups (`@danloadr_bot`),
-  - file size limit (2 GB with the local Bot API server).
-- Reuse the existing help text as the body; add the feature bullets. The bot
-  already sends help when a non-link private message arrives, so the welcome
-  is mostly a better `/start` answer.
+A fresh private chat (< 10 min old) hears it on `/start`, in the user's
+own language (their `/lang` choice over Telegram's detection): what the
+bot turns links into, the quality menu for bare YouTube links, the group
+summon rule, the file limit (`{mb}`, the local server's 2000 MB), and the
+`/lang` pointer. Not on `/help`, and not on a campaign's `/start` (whose
+own text goes out). A day-old chat gets the help only. See `welcome()` in
+`bot.ts`, the `welcome` key in `i18n.ts`, and the e2e "fresh private chat
+hears the welcome".
 
-## 3. Language selection
+## 3. Language selection (done)
 
-- The bot already detects `from.language_code` per message (with an `en`
-  fallback). Add:
-  1. A `/lang` command (and a menu button, item 4) that offers the 8
-     supported languages.
-  2. Store the choice in the existing SQLite database (a `users` table or a
-     column): explicit choice wins over detection; detection only fills the
-     gap when nothing is stored.
-  3. Apply it to everything the bot says in that chat (help, statuses,
-     menu, errors).
+`/lang` offers the bot's nine languages on an inline board (two rows of
+5 and 4, each named in itself); `/lang <code>` takes a choice at once.
+The choice is stored in the `lang` table by user id, an explicit choice
+wins over detection (a code the bot doesn't speak is not silently
+English), and everything it says in that chat goes out in it — help,
+quality menu, download statuses, the guest answer, the welcome. See
+`LANGS`/`normalize`/`resolve` in `i18n.ts`, the `/lang` command and the
+`l:<code>` tap in `bot.ts`, and the e2e "board is tapped into a choice".
+A main-menu button for it is item 4.
 
 ## 4. Main menu (inline)
 
