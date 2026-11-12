@@ -50,6 +50,11 @@ import {
   vttText,
   youtubeVideo,
   pickSub,
+  capDecision,
+  dayKey,
+  formatSize,
+  parseDailyMb,
+  statsOf,
 } from './bot'
 import { lang, normalize, resolve, t } from './i18n'
 
@@ -1723,4 +1728,53 @@ test('pickSub: a manual sub beats an auto one, then the --sub-langs order', () =
   expect(pickSub([`${t}.ar-orig.vtt`, `${t}.en-orig.vtt`])).toBe(`${t}.en-orig.vtt`)
   // a language outside the list loses to a requested one
   expect(pickSub([`${t}.de.vtt`, `${t}.en.vtt`])).toBe(`${t}.en.vtt`)
+})
+
+test('dayKey: the UTC date a usage row is keyed by', () => {
+  expect(dayKey(new Date('2026-11-12T23:59:59Z'))).toBe('2026-11-12')
+  expect(dayKey(new Date('2026-01-01T00:00:00Z'))).toBe('2026-01-01')
+})
+
+test('parseDailyMb: the daily cap from DAILY_MB', () => {
+  expect(parseDailyMb(undefined)).toBe(10240) // the default, 10 GB
+  expect(parseDailyMb('500')).toBe(500)
+  expect(parseDailyMb('2048')).toBe(2048)
+  expect(parseDailyMb('0')).toBeUndefined() // 0 = no cap
+  expect(parseDailyMb('')).toBeUndefined() // unset/empty = no cap
+  expect(parseDailyMb('abc')).toBeUndefined() // not a number = no cap
+  expect(parseDailyMb('2.5')).toBe(2.5)
+})
+
+test('capDecision: a download is refused once the cap is reached', () => {
+  expect(capDecision(undefined, 10_000)).toBe(false) // no cap, never
+  expect(capDecision(100, 0)).toBe(false)
+  expect(capDecision(100, 99)).toBe(false)
+  expect(capDecision(100, 100)).toBe(true) // at the cap
+  expect(capDecision(100, 101)).toBe(true) // over it
+})
+
+test('formatSize: whole MB under a gigabyte, one decimal from there', () => {
+  expect(formatSize(0)).toBe('0 MB')
+  expect(formatSize(500)).toBe('500 MB')
+  expect(formatSize(1023)).toBe('1023 MB')
+  expect(formatSize(1024)).toBe('1 GB')
+  expect(formatSize(1536)).toBe('1.5 GB')
+  expect(formatSize(2560)).toBe('2.5 GB')
+})
+
+test('statsOf: today, this UTC month and all time, from the usage rows', () => {
+  const now = new Date('2026-11-12T10:00:00Z')
+  const rows = [
+    { day: '2026-11-12', n: 2, mb: 100 },
+    { day: '2026-11-01', n: 3, mb: 200 },
+    { day: '2026-10-12', n: 5, mb: 400 },
+    { day: '2026-10-31', n: 1, mb: 10 },
+  ]
+  expect(statsOf(rows, now)).toEqual({
+    today: { n: 2, mb: 100 },
+    month: { n: 5, mb: 300 },
+    all: { n: 11, mb: 710 },
+  })
+  // no rows: all zeros
+  expect(statsOf([], now)).toEqual({ today: { n: 0, mb: 0 }, month: { n: 0, mb: 0 }, all: { n: 0, mb: 0 } })
 })

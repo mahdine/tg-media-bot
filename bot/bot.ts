@@ -14,6 +14,10 @@ const env = process.env
 const API = env.BOT_API_URL || 'https://api.telegram.org'
 // A local Bot API server takes uploads up to 2000 MB, the cloud one 50 MB
 const LIMIT = (API.includes('api.telegram.org') ? 50 : 2000) * 1024 * 1024
+// The user's downloads per UTC day, in MB (10 GB by default, 0 or
+// unset/empty = no cap); a download starts only while the user's MB today
+// are under it (capDecision)
+export const DAILY_MB = () => parseDailyMb(env.DAILY_MB)
 const COOKIES = env.COOKIES || '/cookies.txt'
 const DATA = env.DATA_DIR || './data'
 // file:// paths only work with a local Bot API server
@@ -1198,6 +1202,54 @@ export async function drop(dir: string) {
 export const outcome = (e: unknown) =>
   e instanceof Fail ? `fail:${e.key ?? 'quiet'}` : e instanceof Timeout ? 'timeout' : 'error'
 
+// The UTC day a usage row is keyed by (YYYY-MM-DD): the day a user's cap
+// counts in, and the day /stats' "today" is
+export const dayKey = (now = new Date()) => now.toISOString().slice(0, 10)
+
+// The daily cap from DAILY_MB (per user per UTC day, in MB): 10 GB by
+// default, no cap for 0 or an unset/empty value
+export const parseDailyMb = (v: string | undefined): number | undefined => {
+  if (v === undefined) return 10 * 1024
+  const n = Number(v)
+  return v !== '' && Number.isFinite(n) && n > 0 ? n : undefined
+}
+
+// Whether a download for a user at mb MB used today may not start: only once
+// the used MB has reached the cap (the new file's size isn't predicted)
+export const capDecision = (cap: number | undefined, mb: number) =>
+  cap !== undefined && mb >= cap
+
+// MB, human: whole MB under a gigabyte, one decimal of a gigabyte from there
+export const formatSize = (mb: number) =>
+  mb < 1024 ? `${mb} MB` : `${+(mb / 1024).toFixed(1)} GB`
+
+// One user's downloads, from the usage table: today (dayKey's day), this UTC
+// month and all time, each as count and MB
+export type Stats = {
+  today: { n: number; mb: number }
+  month: { n: number; mb: number }
+  all: { n: number; mb: number }
+}
+export const statsOf = (rows: { day: string; n: number; mb: number }[], now = new Date()): Stats => {
+  const day = now.toISOString().slice(0, 10)
+  const month = now.toISOString().slice(0, 7) + '-01'
+  const zero = { n: 0, mb: 0 }
+  const out: Stats = { today: { ...zero }, month: { ...zero }, all: { ...zero } }
+  for (const { day: d, n, mb } of rows) {
+    out.all.n += n
+    out.all.mb += mb
+    if (d >= month) {
+      out.month.n += n
+      out.month.mb += mb
+      if (d === day) {
+        out.today.n += n
+        out.today.mb += mb
+      }
+    }
+  }
+  return out
+}
+
 function main() {
   const db = new Database(join(DATA, 'bot.sqlite'), { create: true })
   // During a deploy's handover the old container, still polling, writes to
@@ -1282,6 +1334,44 @@ function main() {
   // The language a reply in ctx goes out in: the user's stored choice, else
   // what Telegram detected, else English
   const langOfCtx = (ctx: Context) => resolve(ctx.from?.language_code, langOf(ctx.from?.id))
+  // Each user's downloads per UTC day: the count, and the MB of the files
+  // that went out (a cached copy or a transcript has none). A write or read
+  // that meets another process's lock (a deploy's handover) fails at once,
+  // as the cache's do: it costs a job its row, nothing more (a failed read
+  // fails the cap open: the download may start)
+  db.run('CREATE TABLE IF NOT EXISTS usage (day TEXT NOT NULL, user INTEGER NOT NULL, mb INTEGER NOT NULL DEFAULT 0, n INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, user))')
+  const usageUp = db.query(
+    'INSERT INTO usage (day, user, mb, n) VALUES (?1, ?2, ?3, 1) ON CONFLICT (day, user) DO UPDATE SET mb = usage.mb + excluded.mb, n = usage.n + 1',
+  )
+  const usageUsed = (user: number, day: string) =>
+    cache('usage', () => (db.query('SELECT mb FROM usage WHERE user = ? AND day = ?').get(user, day) as { mb: number } | null)?.mb ?? 0) ?? 0
+  const usageRows = (user: number) =>
+    cache('usageRows', () => db.query('SELECT day, n, mb FROM usage WHERE user = ?').all(user) as { day: string; n: number; mb: number }[]) ?? []
+  // a completed job's MB, credited to its user's day: 0 for a group or a
+  // channel (dest.who not a positive user id) and for a cached copy or a
+  // transcript (no file went out); a lock failure is logged, not thrown
+  const usageRecord = (user: number, mb: number) => {
+    if (!(user > 0)) return
+    try {
+      usageUp.run(dayKey(), user, Math.max(0, Math.round(mb)))
+    } catch (e) {
+      console.error('usage', (e as Error).message)
+    }
+  }
+  // the /stats answer: the user's numbers, and the cap's line (what's left
+  // of the day, or that there is no cap)
+  const statsText = (code: Code, s: Stats) => {
+    const cap = DAILY_MB()
+    const left = cap === undefined ? undefined : Math.max(0, cap - s.today.mb)
+    return t(code, 'stats')
+      .replaceAll('{tn}', String(s.today.n))
+      .replaceAll('{ts}', formatSize(s.today.mb))
+      .replaceAll('{mn}', String(s.month.n))
+      .replaceAll('{ms}', formatSize(s.month.mb))
+      .replaceAll('{an}', String(s.all.n))
+      .replaceAll('{as}', formatSize(s.all.mb))
+      .replaceAll('{cap}', left === undefined ? t(code, 'noCap') : t(code, 'capLeft').replaceAll('{left}', String(left)).replaceAll('{cap}', String(cap)))
+  }
 
   Bun.serve({
     port: Number(env.STATS_PORT || 8080),
@@ -1388,6 +1478,9 @@ function main() {
     } finally {
       log.total = elapsed(start)
       console.log('job', result, Object.entries(log).map(([k, v]) => `${k}=${v}`).join(' '))
+      // the completed download's MB (dest.uploadMb, the file that went out:
+      // 0 for a cached copy or a transcript) counts toward the user's day
+      if (result === 'ok' || result === 'cached') usageRecord(dest.who ?? 0, dest.uploadMb ?? 0)
     }
   }
 
@@ -1978,6 +2071,19 @@ function main() {
         })
     }
     try {
+      // the daily cap: once the user's MB today have reached it, no download
+      // starts (the file's own size isn't predicted — the day is used up); a
+      // group or a channel (dest.who not a positive user id) isn't capped
+      const cap = DAILY_MB()
+      const who = dest.who
+      const capped = cap !== undefined && who !== undefined && who > 0 && capDecision(cap, usageUsed(who, dayKey()))
+      if (capped) {
+        ended = true
+        await then(() =>
+          show('limit', false, undefined, t(lang, 'limit').replaceAll('{mb}', String(cap))),
+        )
+        return
+      }
       const f = await deliver(dest, url, status)
       ended = true
       promo.record(d)
@@ -2197,6 +2303,13 @@ function main() {
     // campaign's, whose payload is the campaign code and whose own text goes
     // out) in a fresh private chat
     else if (!/^\/help(@\w+)?\b/i.test(ctx.msg?.text ?? '')) welcome(ctx)
+  })
+  // /stats: the user's own downloads (today, this UTC month, all time) and
+  // the daily cap's line. Private chats only: in a group it would say about
+  // one member what the whole group could read
+  bot.command('stats', (ctx) => {
+    if (ctx.chat.type !== 'private' || !ctx.from) return
+    void track(ctx.reply(statsText(langOfCtx(ctx), statsOf(usageRows(ctx.from.id)))).catch(console.error))
   })
   // /lang: the board of the bot's languages; /lang <code> takes it at once
   bot.command('lang', (ctx) => {

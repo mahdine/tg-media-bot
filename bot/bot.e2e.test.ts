@@ -3484,3 +3484,90 @@ e2e(
   },
   20_000,
 )
+
+e2e(
+  'bot: /stats counts a finished download (today, month, all time), and DAILY_MB stops the day at the cap',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    // the stub's FAKE_MP4 is under 1 MB, so the bot floors every upload to 1 MB
+    const bot = start({ DATA_DIR: data, DAILY_MB: '1' })
+    // the user's MB today, as the bot counts them (the promo test's pattern:
+    // the test reads the bot's own database while it runs)
+    const used = () => {
+      const d = new Database(join(data, 'bot.sqlite'), { readonly: true })
+      try {
+        return (d.query('SELECT coalesce(sum(mb), 0) m FROM usage WHERE user = 1').get() as { m: number }).m
+      } catch {
+        return 0 // the bot isn't up yet (no usage table, or its lock)
+      } finally {
+        d.close()
+      }
+    }
+    let jobs: string[] = []
+    try {
+      // a fresh user: zeros, the cap line showing all of it left
+      bot.command(1, '/stats')
+      await bot.until(() => bot.statuses(1).some((s) => s.startsWith('📊') && s.includes('0 (0 MB)') && s.includes('1 MB left of 1 MB')))
+      // one finished download (1 MB, the bot's floor for the stub's clip)
+      bot.link(1, 'short1')
+      await bot.until(() => bot.videos().length === 1)
+      await bot.until(() => used() >= 1) // the job's row, landed
+      // /stats counts it
+      bot.command(1, '/stats')
+      await bot.until(() => bot.statuses(1).some((s) => s.startsWith('📊') && s.includes('1 (1 MB)') && s.includes('0 MB left of 1 MB')))
+      // the next download: the day is used up -> refused, nothing sent
+      bot.link(1, 'short2')
+      await bot.until(() => bot.statuses(1).includes(t('en', 'limit').replaceAll('{mb}', '1')))
+      expect(bot.videos()).toHaveLength(1)
+      expect(used()).toBe(1)
+    } finally {
+      jobs = await bot.stop()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.filter((l) => l.startsWith('job ok '))).toHaveLength(1)
+    expect(jobs).toHaveLength(1)
+  },
+  30_000,
+)
+
+e2e(
+  'bot: the day fills to the cap download by download, and the cap left is the one left over',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const bot = start({ DATA_DIR: data, DAILY_MB: '2' })
+    const used = () => {
+      const d = new Database(join(data, 'bot.sqlite'), { readonly: true })
+      try {
+        return (d.query('SELECT coalesce(sum(mb), 0) m FROM usage WHERE user = 1').get() as { m: number }).m
+      } catch {
+        return 0 // the bot isn't up yet (no usage table, or its lock)
+      } finally {
+        d.close()
+      }
+    }
+    let jobs: string[] = []
+    try {
+      bot.link(1, 'short1') // 1 MB
+      await bot.until(() => bot.videos().length === 1)
+      await bot.until(() => used() >= 1)
+      // half the day used: the remainder shows
+      bot.command(1, '/stats')
+      await bot.until(() => bot.statuses(1).some((s) => s.startsWith('📊') && s.includes('1 (1 MB)') && s.includes('1 MB left of 2 MB')))
+      bot.link(1, 'short2') // the day hits the cap exactly
+      await bot.until(() => bot.videos().length === 2)
+      await bot.until(() => used() >= 2)
+      bot.command(1, '/stats')
+      await bot.until(() => bot.statuses(1).some((s) => s.startsWith('📊') && s.includes('2 (2 MB)') && s.includes('0 MB left of 2 MB')))
+      // the third is refused
+      bot.link(1, 'short3')
+      await bot.until(() => bot.statuses(1).includes(t('en', 'limit').replaceAll('{mb}', '2')))
+      expect(bot.videos()).toHaveLength(2)
+      expect(used()).toBe(2)
+    } finally {
+      jobs = await bot.stop()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.filter((l) => l.startsWith('job ok '))).toHaveLength(2)
+  },
+  30_000,
+)

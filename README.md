@@ -47,7 +47,9 @@ tg-media-bot/
   quality
 - Download queue, Telegram flood-control handling, works in groups and private
 - yt-dlp auto-update (disable with `YTDLP_UPDATE=off`)
-- Multilingual replies (`i18n.ts` — 8 languages)
+- Multilingual replies (`i18n.ts` — 9 languages), `/lang` to pick a language
+- `/stats` and a per-user **daily limit** (`DAILY_MB`, MB per UTC day, 10 GB
+  default, `0` for none)
 - Future work: see [ROADMAP.md](ROADMAP.md)
 
 ## Prerequisites
@@ -72,6 +74,7 @@ nano .env
 | `TELEGRAM_API_HASH` | **yes** | same page |
 | `YTDLP_UPDATE` | no | `off` = pin the installed yt-dlp (template default) |
 | `MAX_DOWNLOADS` | no | concurrent downloads (default 8) |
+| `DAILY_MB` | no | per-user daily cap in MB, per UTC day (default 10240, `0` for none) |
 | `ADMIN_ID` | no | Telegram user id to alert if the YouTube login/cookies die |
 | `DATA_DIR` / `STATS_PORT` / `STORAGE_CHAT` / `COOKIES` | no | see `.env.example` |
 

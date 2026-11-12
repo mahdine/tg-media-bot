@@ -19,6 +19,11 @@ const strings = {
       "👋 I turn links into files: send me a link to a video or a post, and I'll send the file back here — YouTube, Instagram, X, TikTok and over 1,000 other sites, files up to {mb} MB.\n\nA bare YouTube link gets a quality menu first: best video, 720p, audio only or a transcript.\n\nIn groups, add me and make me an admin so I see every link; otherwise I download only the links that mention me.\n\nPrefer another language? /lang",
     langOffer: '🌐 Pick the language I speak to you in:',
     langSet: '✅ I will speak to you in English from now on.',
+    limit: '🚫 Your daily limit of {mb} MB is used up. It resets at midnight (UTC). Try again then.',
+    stats:
+      '📊 Your downloads:\n📅 Today: {tn} ({ts})\n🗓 This month: {mn} ({ms})\n💾 All time: {an} ({as})\n🚫 Daily limit: {cap}',
+    noCap: 'no limit',
+    capLeft: '{left} MB left of {cap} MB',
   },
   ru: {
     help: '😎 Пришлите мне ссылку на видео, и я пришлю само видео.\n\nВ группах тоже работаю: добавьте меня в группу, и я буду скачивать все видео по ссылкам, которые там отправляют.',
@@ -40,6 +45,11 @@ const strings = {
       '👋 Я превращаю ссылки в файлы: пришлите мне ссылку на видео или пост — я пришлю файл обратно сюда. YouTube, Instagram, X, TikTok и ещё более 1000 сайтов; файлы до {mb} МБ.\n\nДля ссылки на YouTube я сначала покажу меню качества: лучшее видео, 720p, только звук или текст.\n\nВ группах добавьте меня и сделайте админом, чтобы я видел все ссылки; иначе скачиваю только ссылки, где меня упоминают.\n\nХотите другой язык? /lang',
     langOffer: '🌐 Выберите язык, на котором я с вами общаюсь:',
     langSet: '✅ Теперь я буду говорить с вами по-русски.',
+    limit: '🚫 Ваш дневной лимит {mb} МБ исчерпан. Он сбрасывается в полночь (UTC). Попробуйте тогда снова.',
+    stats:
+      '📊 Ваши загрузки:\n📅 Сегодня: {tn} ({ts})\n🗓 За этот месяц: {mn} ({ms})\n💾 За всё время: {an} ({as})\n🚫 Дневной лимит: {cap}',
+    noCap: 'без лимита',
+    capLeft: 'осталось {left} МБ из {cap} МБ',
   },
   es: {
     help: '😎 Envíame un enlace a un vídeo y te enviaré el vídeo.\n\nTambién funciono en grupos: añádeme a un grupo y descargaré todos los vídeos cuyos enlaces se publiquen allí.',
@@ -61,6 +71,11 @@ const strings = {
       '👋 Convierto enlaces en archivos: envíame un enlace a un vídeo o a una publicación y te enviaré el archivo de vuelta aquí — YouTube, Instagram, X, TikTok y más de 1.000 sitios, archivos de hasta {mb} MB.\n\nUn enlace de YouTube a secas recibe primero el menú de calidad: mejor vídeo, 720p, solo audio o transcripción.\n\nEn grupos, añádenme y hazme administrador para que vea todos los enlaces; si no, solo descargo los enlaces donde me mencionan.\n\n¿Prefieres otro idioma? /lang',
     langOffer: '🌐 Elige el idioma en el que te hablo:',
     langSet: '✅ A partir de ahora te hablaré en español.',
+    limit: '🚫 Has agotado tu límite diario de {mb} MB. Se reinicia a medianoche (UTC). Prueba entonces de nuevo.',
+    stats:
+      '📊 Tus descargas:\n📅 Hoy: {tn} ({ts})\n🗓 Este mes: {mn} ({ms})\n💾 En total: {an} ({as})\n🚫 Límite diario: {cap}',
+    noCap: 'sin límite',
+    capLeft: 'quedan {left} MB de {cap} MB',
   },
   'pt-br': {
     help: '😎 Me mande o link de um vídeo e eu te envio o vídeo.\n\nTambém funciono em grupos: me adicione a um grupo e vou baixar todos os vídeos cujos links forem enviados lá.',
@@ -82,6 +97,11 @@ const strings = {
       '👋 Eu transformo links em arquivos: me mande um link de um vídeo ou de uma publicação e eu te envio o arquivo de volta aqui — YouTube, Instagram, X, TikTok e mais de 1.000 sites, arquivos de até {mb} MB.\n\nUm link de YouTube a seco recebe primeiro o menu de qualidade: melhor vídeo, 720p, só áudio ou transcrição.\n\nEm grupos, me adicione e me torne administrador para que eu veja todos os links; caso contrário, só baixo os links que me mencionam.\n\nPrefere outro idioma? /lang',
     langOffer: '🌐 Escolha o idioma em que eu falo com você:',
     langSet: '✅ A partir de agora vou falar com você em português (Brasil).',
+    limit: '🚫 Seu limite diário de {mb} MB está esgotado. Ele é renovado à meia-noite (UTC). Tente de novo então.',
+    stats:
+      '📊 Seus downloads:\n📅 Hoje: {tn} ({ts})\n🗓 Este mês: {mn} ({ms})\n💾 Desde o início: {an} ({as})\n🚫 Limite diário: {cap}',
+    noCap: 'sem limite',
+    capLeft: 'restam {left} MB de {cap} MB',
   },
   pt: {
     help: '😎 Envia-me a ligação de um vídeo e eu envio-te o vídeo.\n\nTambém funciono em grupos: adiciona-me a um grupo e vou descarregar todos os vídeos cujas ligações forem partilhadas lá.',
@@ -103,6 +123,11 @@ const strings = {
       '👋 Eu transformo ligações em ficheiros: envia-me a ligação de um vídeo ou de uma publicação e eu envio-te o ficheiro de volta aqui — YouTube, Instagram, X, TikTok e mais de 1.000 sites, ficheiros até {mb} MB.\n\nUma ligação de YouTube a secas recebe primeiro o menu da qualidade: melhor vídeo, 720p, só áudio ou transcrição.\n\nEm grupos, adiciona-me e torna-me administrador para que eu veja todas as ligações; caso contrário, só descarrego as ligações onde me mencionam.\n\nPrefere outro idioma? /lang',
     langOffer: '🌐 Escolhe o idioma em que eu falo contigo:',
     langSet: '✅ A partir de agora vou falar contigo em português.',
+    limit: '🚫 O teu limite diário de {mb} MB está esgotado. É renovado à meia-noite (UTC). Volta a tentar então.',
+    stats:
+      '📊 As tuas descargas:\n📅 Hoje: {tn} ({ts})\n🗓 Este mês: {mn} ({ms})\n💾 No total: {an} ({as})\n🚫 Limite diário: {cap}',
+    noCap: 'sem limite',
+    capLeft: 'restam {left} MB de {cap} MB',
   },
   ja: {
     help: '😎 動画のリンクを送ってください。動画にしてお返しします。\n\nグループでも使えます：私をグループに追加すると、投稿された動画リンクをすべてダウンロードします。',
@@ -124,6 +149,11 @@ const strings = {
       '👋 リンクをファイルに変えます：動画や投稿のリンクを送ってください。ファイルをお返しします — YouTube、Instagram、X、TikTok、1,000以上のサイトに対応し、{mb} MB までのファイルを扱います。\n\nYouTube のリンクだけを送ると、まず品質のメニューが出ます：最高画質、720p、音声のみ、文字起こし。\n\nグループでは、私を追加して管理者にするとすべてのリンクが見えます。そうでない場合は、メンションのあるリンクだけダウンロードします。\n\n別の言語がよいですか？ /lang を使ってください。',
     langOffer: '🌐 私の返信の言語を選んでください:',
     langSet: '✅ 今後は日本語でお答えします。',
+    limit: '🚫 本日の上限 {mb} MB を使い切りました。0時 (UTC) にリセットされます。その後にまたお試しください。',
+    stats:
+      '📊 あなたのダウンロード:\n📅 本日の利用: {tn} ({ts})\n🗓 今月: {mn} ({ms})\n💾 全体: {an} ({as})\n🚫 本日の上限: {cap}',
+    noCap: '上限なし',
+    capLeft: '{cap} MB 中の残り {left} MB',
   },
   zh: {
     help: '😎 给我发送视频链接，我会把视频发回给你。\n\n也可以在群组中使用：把我加入群组，我会下载群里发的所有视频链接。',
@@ -145,6 +175,11 @@ const strings = {
       '👋 我把链接变成文件：把视频或帖子的链接发给我，我会把文件发回这里 — 支持 YouTube、Instagram、X、TikTok 和 1000 多个网站，文件最大 {mb} MB。\n\n只发一个 YouTube 链接时，我会先给你质量菜单：最佳画质、720p、仅音频、文字记录。\n\n在群组里，把我加进来并设为管理员，我就能看到所有链接；否则只有提到我的链接才会被下载。\n\n想用其他语言？发送 /lang。',
     langOffer: '🌐 选择我用什么语言回复你:',
     langSet: '✅ 从现在开始我将用中文回复你。',
+    limit: '🚫 你今天的 {mb} MB 限额已用完。它在午夜（UTC）重置。到时再试。',
+    stats:
+      '📊 你的下载:\n📅 今天: {tn} ({ts})\n🗓 这个月: {mn} ({ms})\n💾 总共: {an} ({as})\n🚫 每日限额: {cap}',
+    noCap: '无限制',
+    capLeft: '共 {cap} MB，还剩 {left} MB',
   },
   ar: {
     help: '😎 أرسل لي رابط فيديو وسأرسل لك الفيديو نفسه.\n\nأعمل في المجموعات أيضًا: أضفني إلى مجموعة وسأنزّل كل فيديو يُنشر رابطه هناك.',
@@ -166,6 +201,11 @@ const strings = {
       '👋 أحوّل الروابط إلى ملفات: أرسل لي رابط فيديو أو منشور وسأرسل لك الملف هنا — يوتيوب، إنستغرام، إكس، تيك توك وأكثر من 1000 موقع، وملفات حتى {mb} م.ب.\n\nإذا أرسلت رابط يوتيوب وحده، أقدّم لك أولاً قائمة الجودة: أفضل فيديو، 720p، صوت فقط، أو نص الفيديو.\n\nفي المجموعات، أضفني واجعلني مشرفًا لأرى كل الروابط؛ وإلا أنزّل فقط الروابط التي تذكرني.\n\nتفضّل لغة أخرى؟ /lang',
     langOffer: '🌐 اختر اللغة التي أتكلم بها معك:',
     langSet: '✅ سأتكلم معك باللغة العربية من الآن فصاعدًا.',
+    limit: '🚫 نفد حدك اليومي من {mb} م.ب. يُعاد ضبطه عند منتصف الليل (UTC). جرّب مرة أخرى حينها.',
+    stats:
+      '📊 تنزيلاتك:\n📅 اليوم: {tn} ({ts})\n🗓 هذا الشهر: {mn} ({ms})\n💾 طوال الوقت: {an} ({as})\n🚫 الحد اليومي: {cap}',
+    noCap: 'بدون حد',
+    capLeft: 'تبقى {left} م.ب من {cap} م.ب',
   },
   fa: {
     help: '😎 لینک یک ویدیو را برایم بفرست تا خود ویدیو را برایت بفرستم.\n\nدر گروه‌ها هم کار می‌کنم: من را به گروه اضافه کن تا همه ویدیوهایی را که لینکشان آنجا فرستاده می‌شود دانلود کنم.',
@@ -187,6 +227,11 @@ const strings = {
       '👋 من لینک‌ها را فایل می‌کنم: لینک یک ویدیو یا پست را بفرست تا فایلش را همین‌جا برایت بفرستم — یوتیوب، اینستاگرام، ایکس، تیک‌تاک و بیش از ۱۰۰۰ سایت دیگر؛ تا {mb} مگابایت.\n\nبرای لینک خالی یوتیوب اول منوی کیفیت می‌دهم: بهترین کیفیت، ۷۲۰p، فقط صدا، یا متن ویدیو.\n\nدر گروه‌ها، من را اضافه کن و ادمین کن تا همه لینک‌ها را ببینم؛ وگرنه فقط لینک‌هایی را که منشن می‌کنی دانلود می‌کنم.\n\nزبان دیگری ترجیح می‌دهی؟ /lang',
     langOffer: '🌐 انتخاب کن به چه زبانی باهات حرف بزنم:',
     langSet: '✅ از این به بعد به فارسی باهات حرف می‌زنم.',
+    limit: '🚫 سقف روزانه‌ی {mb} مگابایتت تمام شد. آن در نیمه‌شب (UTC) ریست می‌شود. آن‌وقت دوباره امتحان کن.',
+    stats:
+      '📊 دانلودهای تو:\n📅 امروز: {tn} ({ts})\n🗓 این ماه: {mn} ({ms})\n💾 از ابتدا: {an} ({as})\n🚫 سقف روزانه: {cap}',
+    noCap: 'بدون سقف',
+    capLeft: 'از {cap} مگابایت، {left} مگابایت مانده',
   },
 }
 
