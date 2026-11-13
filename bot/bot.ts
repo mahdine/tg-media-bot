@@ -79,6 +79,39 @@ export const YTDLP = [
 // tests (no E2E_PARENT_PID), where a bare YouTube link must download at once,
 // so a bot run with E2E_PARENT_PID set skips the menu (menu(), below).
 export type Quality = 'best' | '720' | 'audio' | 'transcript'
+// A direct file link's extension (mp3, pdf, …), lowercase, or undefined: the
+// URL's last path segment's dot. A generic page (no extension in the path)
+// gives none, so only a bare file address is ever named by it
+export const fileExt = (url: string): string | undefined => {
+  const seg = url.split('/').pop()?.split('?')[0]?.split('#')[0] ?? ''
+  const i = seg.lastIndexOf('.')
+  return i > 0 && i < seg.length - 1 ? seg.slice(i + 1).toLowerCase() : undefined
+}
+// A container that is audio only, so its bytes are an audio track and not a
+// video (an .m4a can carry a video too, but these sites serve audio in it)
+const AUDIO_EXT = new Set(['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wma', 'wav', 'weba'])
+// A file's audio-only: it has no video stream (yt-dlp says vcodec none or NA,
+// or gives no height) AND it's an audio container. yt-dlp's generic extractor
+// marks a direct .mp3 link with vcodec "NA" (not "none"), so the codec alone
+// misses it: the extension is the tiebreaker
+const isAudio = (v: { vcodec?: string | null; height?: number | null }, ext?: string) =>
+  (v.vcodec === 'none' || v.vcodec === 'NA' || !v.height) &&
+  (ext === undefined || AUDIO_EXT.has(ext))
+// A bare file address that is not media (a PDF, a document, an archive): the
+// bot goes out with it as a document, not a video. Its download still runs
+// through the job (yt-dlp's generic extractor fetches it as "unknown_video"),
+// which reuses the cache, the size cap and the progress; the job only renames
+// it to the file's own name and sends it as a document. Media extensions are
+// left to yt-dlp (a site's extractor is usually a better path than the bare
+// address), and audio files (mp3, …) are media, so they keep their own kind
+const DIRECT_EXT = new Set([
+  'pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv',
+  'epub', 'odt', 'ods', 'odp', 'md', 'zip', 'gz', 'tar', 'rar', '7z',
+])
+export const directFile = (url: string) => {
+  const ext = fileExt(url)
+  return ext !== undefined && DIRECT_EXT.has(ext) ? ext : undefined
+}
 // Each quality's yt-dlp args: the format (and, for audio, the extraction),
 // replacing YTDLP's -f/-S/merge. 'best' is the default (YTDLP as-is).
 export const qualityArgs = (q: Quality) =>
@@ -439,8 +472,10 @@ export async function videos(urls: string[]) {
 // What a message asks to download. In a group that isn't the bot's own to
 // answer (not summoned, not an admin group), a link mentioned in passing (a
 // bare domain, an article) isn't a request: only links to a site yt-dlp
-// knows count. In a group the bot is an admin in, a bare link is a request
-// as in a private chat (it hears every message there). The same goes for a
+// knows count. A bare file address (a .pdf, a .zip, …) is a request anywhere:
+// the user who typed it wants the file, not a video. In a group the bot is
+// an admin in, a bare link is a request as in a private chat (it hears every
+// message there). The same goes for a
 // guest message (chat 'guest') in any chat, a private one too: Telegram
 // calls the bot on a plain reply to one of its messages as well, mention or
 // not.
@@ -452,9 +487,11 @@ export async function requested(
   admin = false,
 ) {
   const found = links(msg, me)
-  return chat === 'private' || admin || summoned(msg, me.username) || !found.length
-    ? found
-    : video(found)
+  if (chat === 'private' || admin || summoned(msg, me.username) || !found.length) return found
+  // a group the bot is only a member in: the links yt-dlp would claim, and
+  // the bare file addresses (a .pdf or a .zip is a request even in passing)
+  const vids = await video(found)
+  return [...vids, ...found.filter((u) => !vids.includes(u) && directFile(u))]
 }
 
 // First line against links into the docker network: no IP literals (the URL
@@ -767,6 +804,37 @@ export function limit(max: number, maxLong = max) {
 type Weighed = { filesize?: number | null; filesize_approx?: number | null }
 export const sizes = (v: Weighed & { requested_formats?: Weighed[] }) =>
   (v.requested_formats ?? [v]).map((f) => f.filesize || f.filesize_approx || undefined)
+
+// A format of the menu's: the quality's pick, with what yt-dlp says it weighs
+type MenuFormat = Weighed & { height?: number | null; vcodec?: string | null; tbr?: number | null }
+// The size a quality's menu button shows: what the quality's own -f line
+// would pick, in MB (one decimal), or '' when yt-dlp says nothing of it.
+// 'best' is the link's own download (the picked formats, or the best video
+// and audio from the formats list, as -f bv*+ba/b does); '720' the best of
+// them at 720 or under; 'audio' the best audio alone. A video with no audio
+// (or none) is its size alone
+export const menuSize = (
+  quality: 'best' | '720' | 'audio',
+  v: { requested_formats?: MenuFormat[]; formats?: MenuFormat[] },
+): string => {
+  const b = (f?: MenuFormat) => (f ? (f.filesize || f.filesize_approx || undefined) : undefined)
+  const byTbr = (arr: MenuFormat[]) => [...arr].sort((a, c) => (c.tbr ?? 0) - (a.tbr ?? 0))[0]
+  const audByte = b(byTbr((v.formats ?? []).filter((f) => f.vcodec === 'none' && b(f))))
+  let total: number | undefined
+  if (quality === 'audio') {
+    total = b(v.requested_formats?.find((f) => f.vcodec === 'none')) ?? audByte
+  } else {
+    const vids = (v.formats ?? []).filter((f) => f.vcodec && f.vcodec !== 'none' && b(f))
+    const vidByte =
+      quality === '720' ? b(byTbr(vids.filter((f) => (f.height ?? 0) <= 720))) : undefined
+    if (vidByte !== undefined) total = vidByte + (audByte ?? 0)
+    else if (v.requested_formats?.length)
+      total = v.requested_formats.reduce<number>((all, f) => all + (b(f) ?? 0), 0)
+    else total = b(byTbr(vids))
+  }
+  const mb = total ? total / 2 ** 20 : undefined
+  return mb && Number.isFinite(mb) && mb > 0 ? `${mb < 10 ? mb.toFixed(1) : Math.round(mb)} MB` : ''
+}
 
 // Long videos: over 10 minutes. One that doesn't say how long it is counts as
 // long too (an HLS/DASH stream or a file of unknown length can take 20-40
@@ -1772,7 +1840,7 @@ function main() {
         return { kind: 'document', file_id: '', title: v.title || 'Transcript', url: v.webpage_url || url, text }
       }
       const { out, err } = got
-      const path = out.trim().split('\n').pop()
+      let path = out.trim().split('\n').pop()
       // --print implies --quiet, so a file over --max-filesize is skipped
       // with exit 0 and no output at all
       if (!path || !existsSync(path)) {
@@ -1782,16 +1850,34 @@ function main() {
       const bytes = (await stat(path)).size
       log.mb = Math.round(bytes / 2 ** 20)
       if (bytes > LIMIT) throw new Fail('tooBig')
+      // A bare non-media file (a .pdf, a .zip, …): yt-dlp's generic extractor
+      // downloads it as "unknown_video". It isn't media, so it goes out as a
+      // document, renamed to the file's own name (yt-dlp's basename, or the
+      // link's last segment). Media links never match: their extension isn't
+      // in the list, so they keep their download path and kind
+      const docExt = directFile(url)
+      const docName =
+        v.webpage_url_basename ?? (url.split('/').pop() || '').split(/[?#]/)[0] ?? ''
+      if (docExt && docName && join(dir, docName) !== path) {
+        try {
+          await rename(path, join(dir, docName))
+        } catch (e) {
+          console.error('rename', (e as Error).message)
+        }
+        path = join(dir, docName)
+      }
 
       // the upload's line shows the size (the API reports no progress)
       dest.uploadMb = Math.max(1, Math.round(bytes / 2 ** 20))
       const sending = Date.now()
       await status('uploading')
       await SCRATCH.open(path, true)
-      const audio = quality === 'audio' || v.vcodec === 'none'
+      const ext = (v.ext ?? fileExt(url) ?? '').toLowerCase()
+      const audio = quality === 'audio' || isAudio(v, ext)
+      const doc = directFile(url) !== undefined
       const thumb = join(dir, 'thumb.jpg')
-      const box = audio ? undefined : await probe(path)
-      if (!audio)
+      const box = audio || doc ? undefined : await probe(path)
+      if (!audio && !doc)
         await Bun.spawn([
           'ffmpeg', '-v', 'error', '-y',
           '-ss', String(Math.min(1, (v.duration ?? 0) / 2)),
@@ -1800,7 +1886,7 @@ function main() {
           '-vf', THUMB,
           thumb,
         ]).exited
-      const f = { title: v.title || 'Video', url: v.webpage_url || url }
+      const f = { title: doc ? (v.webpage_url_basename || v.title || 'File') : v.title || 'Video', url: v.webpage_url || url }
       // Past the exit's cut the job's chats have heard to send the link
       // again, or hear it now (a guest reply, a request that came after the
       // cut): an upload begun now would go out next to that, finished by a
@@ -1811,14 +1897,14 @@ function main() {
       dest.uploading = true
       const [kind, file_id] = await send(
         dest,
-        audio ? 'audio' : 'video',
+        doc ? 'document' : audio ? 'audio' : 'video',
         () => SCRATCH.local(path) ?? new InputFile(path),
         {
           ...options(dest, f),
-          width: box?.width ?? v.width ?? undefined,
-          height: box?.height ?? v.height ?? undefined,
-          duration: v.duration ? Math.round(v.duration) : undefined,
-          thumbnail: existsSync(thumb) ? new InputFile(thumb) : undefined,
+          width: doc ? undefined : box?.width ?? v.width ?? undefined,
+          height: doc ? undefined : box?.height ?? v.height ?? undefined,
+          duration: doc || !v.duration ? undefined : Math.round(v.duration),
+          thumbnail: !doc && !audio && existsSync(thumb) ? new InputFile(thumb) : undefined,
           title: audio ? f.title : undefined,
           performer: audio ? v.uploader : undefined,
         },
@@ -1967,6 +2053,24 @@ function main() {
   // off by itself (30 min).
   const menuLinks = new Map<string, string>()
   const menuKey = (ctx: Context) => `${ctx.chat!.id}:${ctx.msg!.message_id}`
+  // The sizes the menu's buttons show, read once from the video's metadata
+  // (a -J, no download): what each quality's own -f line would pick, in MB.
+  // Undefined (the board stays as it was) when yt-dlp says nothing of it, or
+  // in a bot run with E2E_PARENT_PID (tests, where the stub has no formats
+  // and the extra -J would only add work). Fire-and-forget: a menu that no
+  // one taps drops off (menuLinks) regardless of whether the sizes ever land
+  const menuSizes = (url: string): Promise<{ best: string; '720': string; audio: string } | undefined> =>
+    env.E2E_PARENT_PID
+      ? Promise.resolve(undefined)
+      : ytdlp([...YTDLP, '-J', url], 60_000)
+          .then(({ out }) => {
+            const v = JSON.parse(out)
+            const best = menuSize('best', v)
+            const s720 = menuSize('720', v)
+            const audio = menuSize('audio', v)
+            return best || s720 || audio ? { best, '720': s720, audio } : undefined
+          })
+          .catch(() => undefined)
   const answerMenu = (ctx: Context, url: string) => {
     const key = menuKey(ctx)
     const lang = langOfCtx(ctx)
@@ -1981,21 +2085,35 @@ function main() {
     // lost its reply reads the link back from it
     const vid = /(?:\?v=|\/shorts\/)(\w+)/.exec(url)?.[1]
     const suffix = vid ? `:${vid}` : ''
-    const board: InlineKeyboardButton[][] = [
+    // a button's label, its size (from menuSizes) appended when it has one
+    const row = (s: { best: string; '720': string; audio: string }) => [
       [
-        { text: t(lang, 'qBest'), callback_data: `q:best${suffix}` },
-        { text: t(lang, 'q720'), callback_data: `q:720${suffix}` },
+        { text: t(lang, 'qBest') + (s.best ? ` ${s.best}` : ''), callback_data: `q:best${suffix}` },
+        { text: t(lang, 'q720') + (s['720'] ? ` ${s['720']}` : ''), callback_data: `q:720${suffix}` },
       ],
       [
-        { text: t(lang, 'qAudio'), callback_data: `q:audio${suffix}` },
+        { text: t(lang, 'qAudio') + (s.audio ? ` ${s.audio}` : ''), callback_data: `q:audio${suffix}` },
         { text: t(lang, 'qTranscript'), callback_data: `q:transcript${suffix}` },
       ],
+      [{ text: t(lang, 'qNone'), callback_data: `q:none${suffix}` }],
     ]
     void track(
       ctx
         .reply(t(lang, 'qualityMenu'), {
           reply_parameters: { message_id: ctx.msg!.message_id, allow_sending_without_reply: true },
-          reply_markup: { inline_keyboard: board },
+          reply_markup: { inline_keyboard: row({ best: '', '720': '', audio: '' }) },
+        })
+        .then((r) => {
+          // the sizes land after the board is up: edit the same message once,
+          // leaving a menu no one has tapped to drop off on its own meanwhile
+          if (r?.message_id)
+            void track(
+              menuSizes(url).then((s) =>
+                s
+                  ? ctx.api.editMessageText(ctx.chat!.id, r!.message_id, t(lang, 'qualityMenu'), { reply_markup: { inline_keyboard: row(s) } }).catch(() => {})
+                  : Promise.resolve(),
+              ),
+            )
         })
         .catch(() => {
           menuLinks.delete(key)
@@ -2006,9 +2124,9 @@ function main() {
   // A menu button's tap: the quality, and the video's id the button was for
   // (a menu offered for a URL without a plain id sends none), or undefined
   // when the callback is not the bot's menu (another bot's, or the user's own)
-  const qualityTap = (data: string): { q: Quality; id?: string } | undefined => {
-    const m = /^q:(best|720|audio|transcript)(?::(\w+))?$/.exec(data)
-    return m ? { q: m[1] as Quality, id: m[2] } : undefined
+  const qualityTap = (data: string): { q: Quality | 'none'; id?: string } | undefined => {
+    const m = /^q:(best|720|audio|transcript|none)(?::(\w+))?$/.exec(data)
+    return m ? { q: m[1] as Quality | 'none', id: m[2] } : undefined
   }
 
   async function handle(ctx: Context, url: string, quality?: Quality) {
@@ -2523,6 +2641,21 @@ function main() {
       )
       return
     }
+    // a tap on the quality menu's "none": the user doesn't want this link.
+    // Take the menu down and say so — no download, no status
+    if (tap?.q === 'none' && menu) {
+      const src = menu.reply_to_message
+      void track(
+        ctx
+          .answerCallbackQuery()
+          .then(async () => {
+            if (src) menuLinks.delete(`${ctx.chat!.id}:${src.message_id}`)
+            await ctx.api.editMessageText(ctx.chat!.id, menu.message_id, t(langOfCtx(ctx), 'qNoneDone')).catch(() => {})
+          })
+          .catch(console.error),
+      )
+      return
+    }
     if (!tap || !menu) return
     const src = menu.reply_to_message
     let url = src ? menuLinks.get(`${ctx.chat!.id}:${src.message_id}`) : undefined
@@ -2542,7 +2675,7 @@ function main() {
             src ??
             ({ message_id: menu.message_id, chat: menu.chat, from: ctx.from, text: url, entities: [] } as any)
           const fresh = new Context({ update_id: 0, message: msg } as any, bot.api, ctx.me)
-          void track(handle(fresh, url, tap.q).catch(console.error))
+          void track(handle(fresh, url, tap.q === 'none' ? undefined : tap.q).catch(console.error))
         })
         .catch(() => {}),
     )

@@ -159,6 +159,8 @@ function start(
       }
       if (method === 'sendAudio')
         return ok({ message_id: ++id, date: 0, chat, audio: { file_id: `a${id}`, file_unique_id: `u${id}`, duration: 1 } })
+      if (method === 'sendDocument')
+        return ok({ message_id: ++id, date: 0, chat, document: { file_id: `d${id}`, file_unique_id: `u${id}`, file_name: String(body.document).split('/').pop() } })
       return ok(true)
     },
   })
@@ -252,6 +254,19 @@ function start(
     // in a private chat; returns the message (a tap's menu replies to it)
     link(user: number, v: string) {
       const m = message(user, v)
+      updates.push({ update_id: updates.length + 1, message: m } as { update_id: number })
+      return m
+    },
+    // a raw URL (a direct file, a page) in a private chat; returns the message
+    raw(user: number, url: string) {
+      const m = {
+        message_id: ++id,
+        date: 0,
+        text: url,
+        entities: [{ type: 'url', offset: 0, length: url.length }],
+        chat: { id: user, type: 'private', first_name: 'u' },
+        from: { id: user, is_bot: false, first_name: 'u', language_code: 'en' },
+      }
       updates.push({ update_id: updates.length + 1, message: m } as { update_id: number })
       return m
     },
@@ -460,6 +475,7 @@ function start(
       }
     },
     videos: () => calls.filter((c) => c.method === 'sendVideo'),
+    documents: () => calls.filter((c) => c.method === 'sendDocument'),
     // the status texts a chat got, sent or edited
     statuses: (chat: number) =>
       calls.filter((c) => c.chat === chat && /^(sendMessage|editMessageText)$/.test(c.method)).map((c) => c.text!),
@@ -3376,6 +3392,70 @@ e2e(
     expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
   },
   25_000,
+)
+
+e2e(
+  'bot: a direct file link (a .pdf) is downloaded by yt-dlp and goes out as a document, not a video',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const url = 'https://files.example/report.pdf'
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // a bare document link in a private chat: straight to the download
+      // (a quality menu is a YouTube thing), out as a document
+      bot.raw(1, url)
+      await bot.until(() => bot.documents().length === 1)
+      // no video of it (the old bug: a direct file went out as a video)
+      expect(bot.videos()).toHaveLength(0)
+      await bot.until(() => bot.jobs().length === 1)
+      // a cached copy of it goes out as a document again
+      bot.raw(1, url)
+      await bot.until(() => bot.documents().length === 2)
+    } finally {
+      jobs = await bot.stop()
+    }
+    // the file's cached as a document, under the link and under its own key
+    const db = new Database(join(data, 'bot.sqlite'), { readonly: true })
+    try {
+      expect(db.query<{ kind: string }, [string]>('SELECT kind FROM files WHERE key = ?').get(url)?.kind).toBe('document')
+      expect(db.query('SELECT 1 FROM files WHERE key = ? AND kind = ?').get('Generic:report.pdf', 'document')).toBeTruthy()
+    } finally {
+      db.close()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
+  },
+  20_000,
+)
+
+e2e(
+  'bot: a direct audio link (a .mp3) is downloaded and goes out as audio, not a video',
+  async () => {
+    const data = mkdtempSync(join(tmpdir(), 'bot-e2e-data-'))
+    const url = 'https://files.example/song.mp3'
+    const bot = start({ DATA_DIR: data })
+    let jobs: string[] = []
+    try {
+      // a .mp3: the generic extractor says vcodec=NA (not none), which once
+      // sent it as a video; it's audio by its container extension
+      bot.raw(1, url)
+      await bot.until(() => bot.calls.some((c) => c.chat === 1 && c.method === 'sendAudio'))
+      expect(bot.videos()).toHaveLength(0)
+      await bot.until(() => bot.jobs().length === 1)
+    } finally {
+      jobs = await bot.stop()
+    }
+    const db = new Database(join(data, 'bot.sqlite'), { readonly: true })
+    try {
+      expect(db.query<{ kind: string }, [string]>('SELECT kind FROM files WHERE key = ?').get(url)?.kind).toBe('audio')
+    } finally {
+      db.close()
+      rmSync(data, { recursive: true, force: true })
+    }
+    expect(jobs.every((l) => l.split(' ', 2)[1] === 'ok')).toBe(true)
+  },
+  20_000,
 )
 
 e2e(

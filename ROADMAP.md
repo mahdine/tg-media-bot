@@ -129,3 +129,24 @@ Implemented and shipped: inline quality menu for bare YouTube links
 (best / 720p / audio / transcript, private chats, non-summoned), real
 download percentage from the file size, and a live `⏫ Uploading… N MB`
 status during the send. Transcript output goes out as a plain text message.
+
+Later additions, same menu:
+- **Sizes on the buttons:** each of Best / 720p / Audio shows what that
+  quality's own `-f` pick weighs, in MB, read from one `-J` (no download).
+  When yt-dlp says nothing of the size the board is unchanged. `menuSize`
+  in `bot.ts`; the unit test "menuSize: best, 720 and audio each size
+  their own pick".
+- **A "None" row:** a tap that dismisses the link — the menu is taken down
+  and the user hears it, no download. `qNone`/`qNoneDone` in `i18n.ts`, the
+  `q:none` tap in `bot.ts`.
+- **Direct files (a .pdf, a .zip, …) go out as a document, and a direct
+  audio (.mp3) as audio.** A bare non-media file address is downloaded
+  through the same job (yt-dlp's generic extractor fetches it), then the
+  job renames it to the file's own name and sends it as a `document` — the
+  cache, size cap and progress are reused. A direct `.mp3` (yt-dlp's
+  generic extractor reports `vcodec=NA`, not `none`, which once sent it as
+  a video) is audio by its container extension. `directFile`/`fileExt`/
+  `isAudio` in `bot.ts`; e2e "a direct file link (a .pdf) is downloaded by
+  yt-dlp and goes out as a document" and "a direct audio link (a .mp3)…
+  audio, not a video". A bare file address is a request even in a group
+  the bot is only a member in (`requested`).

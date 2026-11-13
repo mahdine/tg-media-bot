@@ -112,9 +112,42 @@ const loaded = info >= 0 ? JSON.parse(readFileSync(args[info + 1]!, 'utf8')) : u
 // a playlist's saved info has nothing to download but its page
 const saved = loaded?._type === 'playlist' ? undefined : loaded
 const url: string = loaded ? loaded.webpage_url : args.findLast((a) => a.startsWith('https://'))!
+// A direct file (a .pdf, a .zip, a .mp3, …): the generic extractor finds it,
+// as yt-dlp does — -J describes the file (its real name, vcodec=NA like a
+// direct .mp3's), a download copies FAKE_MP4 to it. Not a video: no format,
+// no height. The container extension says what it is (audio, document)
+const DIRECT_EXT = new Set(['pdf', 'doc', 'docx', 'xls', 'xlsx', 'ppt', 'pptx', 'txt', 'rtf', 'csv', 'epub', 'odt', 'ods', 'odp', 'md', 'zip', 'gz', 'tar', 'rar', '7z'])
+const AUDIO_EXT = new Set(['mp3', 'm4a', 'm4b', 'aac', 'ogg', 'oga', 'opus', 'flac', 'wma', 'wav', 'weba'])
+const directUrl = (): string | undefined => {
+  let u: string
+  try {
+    u = new URL(url).pathname
+  } catch (e) {
+    return undefined
+  }
+  const seg = u.split('/').pop() ?? ''
+  const dot = seg.lastIndexOf('.')
+  const ext = seg.slice(dot + 1).toLowerCase()
+  return dot > 0 && (DIRECT_EXT.has(ext) || AUDIO_EXT.has(ext)) ? seg : undefined
+}
+if (args.includes('-J') && !youtube(url) && directUrl()) {
+  const name = directUrl()!
+  const ext = name.slice(name.lastIndexOf('.') + 1)
+  console.log(JSON.stringify({ id: name, extractor_key: 'Generic', title: name, webpage_url: url, webpage_url_basename: name, url: `https://files.example/${name}`, ext, vcodec: 'NA', filesize: 5 * 2 ** 20, duration: undefined }))
+  process.exit(0)
+}
 if (args.includes('-J') && !youtube(url)) {
   console.error(`ERROR: Unsupported URL: ${url}`)
   process.exit(1)
+}
+if (!args.includes('-J') && directUrl()) {
+  // a direct file's download: the -o template with its real extension, as
+  // yt-dlp names the file it found (not "unknown_video")
+  const out = args[args.indexOf('-o') + 1]!.replace(/%(ext)s$/, directUrl()!.slice(directUrl()!.lastIndexOf('.') + 1))
+  await sleep(200)
+  copyFileSync(process.env.FAKE_MP4!, out)
+  console.log(out)
+  process.exit(0)
 }
 const id = new URL(url).searchParams.get('v')!
 const long = url.includes('long')

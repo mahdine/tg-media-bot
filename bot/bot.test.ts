@@ -14,6 +14,9 @@ import {
   floodWait,
   fresh,
   isLong,
+  fileExt,
+  directFile,
+  menuSize,
   limit,
   links,
   notVideo,
@@ -57,6 +60,55 @@ import {
   statsOf,
 } from './bot'
 import { lang, normalize, resolve, t } from './i18n'
+
+test('fileExt: the last path segment dot, lowercased, undefined for a page', () => {
+  expect(fileExt('https://x.example/a/report.PDF')).toBe('pdf')
+  expect(fileExt('https://x.example/a/archive.zip?sig=abc#frag')).toBe('zip')
+  expect(fileExt('https://www.youtube.com/watch?v=x')).toBeUndefined()
+  expect(fileExt('https://x.example/a/b')).toBeUndefined()
+  expect(fileExt('https://x.example/a/.pdf')).toBeUndefined()
+})
+
+test('directFile: a bare non-media file is a direct file, media and pages are not', () => {
+  expect(directFile('https://x.example/a/report.pdf')).toBe('pdf')
+  expect(directFile('https://x.example/a/archive.zip')).toBe('zip')
+  expect(directFile('https://x.example/a/notes.md')).toBe('md')
+  // media is yt-dlp's business, not a direct file
+  expect(directFile('https://x.example/a/movie.mp4')).toBeUndefined()
+  expect(directFile('https://x.example/a/song.mp3')).toBeUndefined()
+  // a page with no file extension
+  expect(directFile('https://x.example/a/b')).toBeUndefined()
+})
+
+test('menuSize: best, 720 and audio each size their own pick in MB', () => {
+  const MB = 2 ** 20
+  // a YouTube -J: the picked video + audio, and a formats list
+  const yt = {
+    requested_formats: [
+      { format_id: '137', vcodec: 'none', filesize: 8 * MB }, // audio
+      { format_id: '136', vcodec: 'h264', height: 720, filesize: 50 * MB }, // video
+    ],
+    formats: [
+      { format_id: 'a', vcodec: 'h264', height: 240, filesize: 10 * MB, tbr: 200 },
+      { format_id: 'b', vcodec: 'h264', height: 720, filesize: 50 * MB, tbr: 900 },
+      { format_id: 'c', vcodec: 'h264', height: 1080, filesize: 90 * MB, tbr: 1400 },
+      { format_id: '137', vcodec: 'none', filesize: 8 * MB, tbr: 128 },
+      { format_id: '140', vcodec: 'none', filesize: 12 * MB, tbr: 192 },
+    ],
+  }
+  // best: the picked video + audio (50 + 8)
+  expect(menuSize('best', yt)).toBe('58 MB')
+  // 720: the best video at 720 or under (b, 50) + the best audio (140, 12)
+  expect(menuSize('720', yt)).toBe('62 MB')
+  // audio: the audio component of the picked formats (137, 8), not the best
+  // available audio
+  expect(menuSize('audio', yt)).toBe('8.0 MB')
+  // nothing to weigh: an empty video, a sizeless audio
+  expect(menuSize('best', {})).toBe('')
+  expect(menuSize('audio', { formats: [{ vcodec: 'none' }] })).toBe('')
+  // under 10 MB keeps a decimal
+  expect(menuSize('audio', { formats: [{ vcodec: 'none', filesize: 3 * MB, tbr: 64 }] })).toBe('3.0 MB')
+})
 
 test('urls: entities, text links, bare domains, dedupe, non-http dropped', () => {
   const text = 'look youtu.be/x and https://x.com/a/status/1 youtu.be/x ftp://a.b'
@@ -566,7 +618,9 @@ test.skipIf(!Bun.which('yt-dlp') && !process.env.CI)(
   async () => {
     const group = (text: string) => requested(said(text), me, 'group')
     expect(await group('tugport.com запущу скоро')).toEqual([])
-    expect(await group(`read ${article}`)).toEqual([])
+    // a raw document link (a .md here) is a direct file: in groups it's a
+    // request like any other, not a quiet article page
+    expect(await group(`read ${article}`)).toEqual([article])
     expect(await group(`${youtube} lol ${tiktok} tugport.com`)).toEqual([youtube, tiktok])
     // news extractors claim articles: these get a yt-dlp run, and picked(),
     // notVideo() and answer() keep a page without media quiet

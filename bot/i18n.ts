@@ -28,6 +28,8 @@ const strings = {
     mLang: '🌐 Language',
     mAbout: 'ℹ️ About',
     qSet: '✅ I download your links at {q} by default from now on.',
+    qNone: "🚫 None",
+    qNoneDone: "🚫 OK, I won't download it.",
     limit: '🚫 Your daily limit of {mb} MB is used up. It resets at midnight (UTC). Try again then.',
     stats:
       '📊 Your downloads:\n📅 Today: {tn} ({ts})\n🗓 This month: {mn} ({ms})\n💾 All time: {an} ({as})\n🚫 Daily limit: {cap}',
@@ -63,6 +65,8 @@ const strings = {
     mLang: '🌐 Язык',
     mAbout: 'ℹ️ О боте',
     qSet: '✅ Теперь я скачиваю ваши ссылки по умолчанию в качестве {q}.',
+    qNone: "🚫 Нет",
+    qNoneDone: "🚫 Хорошо, я не буду его скачивать.",
     limit: '🚫 Ваш дневной лимит {mb} МБ исчерпан. Он сбрасывается в полночь (UTC). Попробуйте тогда снова.',
     stats:
       '📊 Ваши загрузки:\n📅 Сегодня: {tn} ({ts})\n🗓 За этот месяц: {mn} ({ms})\n💾 За всё время: {an} ({as})\n🚫 Дневной лимит: {cap}',
@@ -98,6 +102,8 @@ const strings = {
     mLang: '🌐 Idioma',
     mAbout: 'ℹ️ Acerca de',
     qSet: '✅ Ahora descargo tus enlaces por defecto con calidad {q}.',
+    qNone: "🚫 Ninguno",
+    qNoneDone: "🚫 Bien, no lo descargaré.",
     limit: '🚫 Has agotado tu límite diario de {mb} MB. Se reinicia a medianoche (UTC). Prueba entonces de nuevo.',
     stats:
       '📊 Tus descargas:\n📅 Hoy: {tn} ({ts})\n🗓 Este mes: {mn} ({ms})\n💾 En total: {an} ({as})\n🚫 Límite diario: {cap}',
@@ -133,6 +139,8 @@ const strings = {
     mLang: '🌐 Idioma',
     mAbout: 'ℹ️ Sobre',
     qSet: '✅ Agora baixo seus links por padrão na qualidade {q}.',
+    qNone: "🚫 Nenhum",
+    qNoneDone: "🚫 Ok, eu não vou baixá-lo.",
     limit: '🚫 Seu limite diário de {mb} MB está esgotado. Ele é renovado à meia-noite (UTC). Tente de novo então.',
     stats:
       '📊 Seus downloads:\n📅 Hoje: {tn} ({ts})\n🗓 Este mês: {mn} ({ms})\n💾 Desde o início: {an} ({as})\n🚫 Limite diário: {cap}',
@@ -168,6 +176,8 @@ const strings = {
     mLang: '🌐 Idioma',
     mAbout: 'ℹ️ Sobre',
     qSet: '✅ Agora descarrego as tuas ligações por omissão na qualidade {q}.',
+    qNone: "🚫 Nenhum",
+    qNoneDone: "🚫 Ok, eu não vou descarregá-lo.",
     limit: '🚫 O teu limite diário de {mb} MB está esgotado. É renovado à meia-noite (UTC). Volta a tentar então.',
     stats:
       '📊 As tuas descargas:\n📅 Hoje: {tn} ({ts})\n🗓 Este mês: {mn} ({ms})\n💾 No total: {an} ({as})\n🚫 Limite diário: {cap}',
@@ -203,6 +213,8 @@ const strings = {
     mLang: '🌐 言語',
     mAbout: 'ℹ️ について',
     qSet: '✅ これからリンクはデフォルトで {q} にダウンロードします。',
+    qNone: "🚫 なし",
+    qNoneDone: "🚫 分かりました、ダウンロードしません。",
     limit: '🚫 本日の上限 {mb} MB を使い切りました。0時 (UTC) にリセットされます。その後にまたお試しください。',
     stats:
       '📊 あなたのダウンロード:\n📅 本日の利用: {tn} ({ts})\n🗓 今月: {mn} ({ms})\n💾 全体: {an} ({as})\n🚫 本日の上限: {cap}',
@@ -238,6 +250,8 @@ const strings = {
     mLang: '🌐 语言',
     mAbout: 'ℹ️ 关于',
     qSet: '✅ 从现在起我默认以 {q} 质量下载你的链接。',
+    qNone: "🚫 无",
+    qNoneDone: "🚫 好的，我不下载它了。",
     limit: '🚫 你今天的 {mb} MB 限额已用完。它在午夜（UTC）重置。到时再试。',
     stats:
       '📊 你的下载:\n📅 今天: {tn} ({ts})\n🗓 这个月: {mn} ({ms})\n💾 总共: {an} ({as})\n🚫 每日限额: {cap}',
@@ -273,6 +287,8 @@ const strings = {
     mLang: '🌐 اللغة',
     mAbout: 'ℹ️ حول',
     qSet: '✅ أنزّل روابطك الآن افتراضيًا بجودة {q}.',
+    qNone: "🚫 لا شيء",
+    qNoneDone: "🚫 حسنًا، لن أنزّله.",
     limit: '🚫 نفد حدك اليومي من {mb} م.ب. يُعاد ضبطه عند منتصف الليل (UTC). جرّب مرة أخرى حينها.',
     stats:
       '📊 تنزيلاتك:\n📅 اليوم: {tn} ({ts})\n🗓 هذا الشهر: {mn} ({ms})\n💾 طوال الوقت: {an} ({as})\n🚫 الحد اليومي: {cap}',
@@ -308,6 +324,8 @@ const strings = {
     mLang: '🌐 زبان',
     mAbout: 'ℹ️ درباره',
     qSet: '✅ از این به بعد لینک‌هایت را پیش‌فرض با کیفیت {q} دانلود می‌کنم.',
+    qNone: "🚫 هیچکدام",
+    qNoneDone: "🚫 باشه، دانلود نمی‌کنم.",
     limit: '🚫 سقف روزانه‌ی {mb} مگابایتت تمام شد. آن در نیمه‌شب (UTC) ریست می‌شود. آن‌وقت دوباره امتحان کن.',
     stats:
       '📊 دانلودهای تو:\n📅 امروز: {tn} ({ts})\n🗓 این ماه: {mn} ({ms})\n💾 از ابتدا: {an} ({as})\n🚫 سقف روزانه: {cap}',
